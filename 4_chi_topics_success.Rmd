@@ -1,0 +1,118 @@
+---
+title: "4_chi_topics_success"
+output: html_document
+---
+
+```{r}
+
+library(ggplot2)
+library(corrplot)
+
+```
+
+
+# Reading data
+
+```{r}
+
+df = read_csv(str_c(sample_path, "corp_new_topics.csv"))
+
+```
+
+# Chi-square
+
+```{r}
+
+df_chi = chisq.test(table(df$state, df$topic))
+df_observed = as.data.frame(df_chi$observed)
+df_resid = as.data.frame(df_chi$residuals)
+
+# https://www-304.ibm.com/support/docview.wss?uid=swg21..
+
+p6 <-ggplot() +
+  geom_tile(data = df_resid, aes(x = Var2, y = Var1, fill = Freq)) +
+  geom_text(data = df_observed, aes(x = Var2, y = Var1, label = Freq), size = 3) +
+  theme_bw() +
+  scale_fill_gradient2(low = "#b2182b",
+  mid = "#f7f7f7",
+  high = "#2166ac",
+  midpoint = 0) +
+  theme(axis.text.x = element_text(angle = 90))
+
+p6
+
+ggsave(str_c(path_plots,"states_chisq.png"), 
+       plot = p6, device = "png", dpi = 300, width = 15, height = 15)
+
+
+# topic_titles = c("", "", "", "голосование",
+# "строительство", "", "", "")
+
+```
+
+```{r}
+
+df_resid_c = df_resid %>% tidyr::spread(Var2, Freq)
+row.names(df_resid_c) = df_resid_c$Var1
+df_resid_c$Var1 = NULL
+df_resid_c = as.matrix(df_resid_c)
+
+d <- dist(df_resid_c)   # find distance matrix 
+hc <- hclust(d)                # apply hirarchical clustering 
+plot(hc) 
+
+
+df_resid$Var1 = factor(df_resid$Var1, levels = rownames(df_resid_c)[hc$order])
+
+```
+
+
+# Procedure description
+
+1) English stop-words [link:https://github.com/igorbrigadir/stopwords/blob/master/en/snowball_original.txt] were deleted.      
+* Additionally, 120 most frequent words were deleted from the text corpus.
+2) Texts are only in English
+
+
+# LDA description
+
+LDA is a probabilistic algorithm, which in practices means that, for instance, two documents (project descriptions) obtain non-zero probabilities to contain or be described by ** all of the Topics **. In order to calculate chi-square for every project description only one Topic having highest probability is chosen. 
+
+
+```{r}
+
+df_chi = chisq.test(table(df$state, df$topic))
+df_observed = as.data.frame(df_chi$observed)
+df_resid = as.data.frame(df_chi$residuals)
+
+
+p6 <- ggplot() +
+  geom_tile(data = df_resid, aes(x = Var2, y = Var1, fill = Freq)) +
+  geom_text(data = df_observed, aes(x = Var2, y = Var1, label = Freq), size = 3) +
+  theme_bw() +
+  scale_fill_gradient2("Pearson\nresiduals", 
+                       low = "#b2182b", mid = "#f7f7f7", high = "#2166ac", 
+                       midpoint = 0, breaks = seq(-5, 25, 5)) +
+  theme(axis.text.x = element_text(angle = 90)) + 
+  ggtitle(label = "Chi-square test: Topics and Project State",
+                  subtitle = str_c("P-Value:", signif(df_chi$p.value, 2))) + 
+  xlab("Topic") + ylab("Project's State")
+  
+p6
+
+ggsave(str_c(path_plots,"states_chisq.png"), 
+       plot = p6, device = "png", dpi = 300, width = 15, height = 15)
+
+
+```
+
+
+# Chi-square test description
+
+Chi-square test indicates, whether the frequencies of topic-state combinations differ from the expected frequencies (which assumed to be uniform). Pearson residuals indicate the level of a combination frequency exceeds (positive residuals) or fails to reach (negative residuals) expected frequencies. Thus, that rectangles coloured red demonstrate topics, which are less prominent for a given state of the project, while blue colour indicate which topics are typical for a given state. Neuitraly colored are combinations' frequencies, which nearly equals to the expected frequencies, indicating no particular pattern.   
+
+# Figure 1 description
+
+Heretofore, the most strong result is the lack of 9th topic prominence in a description of successful topics. Topics 2 and 3 are not generally typical for the successful projects. Meanwhile, Topic 2 is, as well, does not appears more than expected in projects with a state "failed", which means that it is not reliable to articulate even partial connection between success/failure based on Topic 2.
+
+Meanwhile, Topic 3 provides more confidence for a simplistic connectivity inference. It is appearing more and less than expected in, correspondingly, failed and successful projects. Above-mentioned Topic 9, in it's turn, does not appears far more frequently than expected in projects who failed to gather donations, however, is strongly prominent for projects in a live and canceled states.

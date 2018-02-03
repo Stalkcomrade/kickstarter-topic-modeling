@@ -1,0 +1,66 @@
+---
+title: "5_Inspecting_topics"
+output: html_document
+---
+
+```{r, message=FALSE}
+
+# df = read_csv(str_c(sample_path, "corp_new_topics.csv"))
+
+x = 10
+over_path = "/home/stlk/Desktop/DigEc_scripts/over_lda/"
+df = read_csv(str_c(over_path, "corp_new_topics_",x, ".csv"))
+
+
+```
+
+
+## Blurb, topic, state
+
+```{r}
+
+df %>% filter(topic == 7) %>% arrange(desc(gamma)) %$% head(blurb, 10)
+df %>% filter(topic == 7 & state == "successful") %>% arrange(desc(gamma)) %>% head(30) %>% View()
+
+```
+
+
+```{r}
+
+topic_projects = df %>% group_by(topic) %>% top_n(3, gamma) %>% ungroup() %>% arrange(topic, -gamma)
+
+
+topic_projects %>% dplyr::select(topic, description = blurb) %>% knitr::kable(align = "lr", longtable = T)
+
+```
+
+
+
+
+
+## 30 words per topic
+
+```{r, message=FALSE}
+
+ap_lda_td = read_csv(str_c(over_path, "ap_lda_td_", x, ".csv"))
+topic.words = ap_lda_td %>% 
+  group_by(topic) %>% 
+  top_n(20, wt = beta) %>% 
+  ungroup() %>% 
+  arrange(topic, -beta)
+
+top_words = topic.words %>% group_by(topic) %>% mutate(top_words = stringr::str_c(term, collapse = ", "))
+top_words = top_words[!duplicated(top_words$topic),] %>% dplyr::select(-beta, -term)
+  
+
+knitr::kable(top_words, align = "lr", longtable = T)
+
+```
+
+
+```{r}
+
+topic.words %>% filter(topic == 2) %$% stringr::str_c(term, collapse = ", ")
+
+```
+

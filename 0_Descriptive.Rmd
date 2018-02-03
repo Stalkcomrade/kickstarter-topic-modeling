@@ -1,0 +1,236 @@
+---
+title: "0_Descriptive"
+output: html_document
+---
+
+
+```{r}
+
+corp_new = read_csv("/home/stlk/Desktop/DigEc_data_samples/y_mongo_sample.csv")
+
+```
+
+
+
+```{r}
+
+knitr::pandoc(dfc %>% dplyr::select(state,) %>% as.factor() %>% summary())
+
+knitr::kable(dfc$state %>% as.factor() %>% summary())
+
+
+```
+
+# Chi dataset
+
+```{r}
+
+df = read_csv(str_c(over_path, "corp_new_topics_",x, ".csv"))
+
+df$state %>% as.factor %>% summary()
+df = df[df$state != "suspended" & df$state != "canceled",]
+df = df[df$state_new != "suspended" & df$state_new != "canceled",]
+
+
+```
+
+
+# Topics Distribution
+
+```{r}
+
+df$topic %>% as.factor() %>% summary()
+
+df$topic_cat = ifelse(df$topic %in% c(2,4), "overfunded", 
+                      ifelse(df$topic %in% c(3,5,6), "successful", 
+                      ifelse(df$topic %in% c(1,10), "failed", "not prominent")))
+
+df$topic_cat %<>%  as.factor()
+df$topic_cat = factor(df$topic_cat, levels(df$topic_cat)[c(3,4,1,2)])
+
+df$topic_color = ifelse(df$topic_cat == "overfunded", "green",
+                      ifelse(df$topic_cat == "successful", "blue", 
+                      ifelse(df$topic_cat == "failed", "red", "gray")))
+
+df$topic %<>% as.factor()
+
+df$topic_sort = ifelse(df$topic_cat == "overfunded", 1,
+                      ifelse(df$topic_cat == "successful", 2, 
+                      ifelse(df$topic_cat == "failed", 3, 4)))
+
+
+ggplot(data = df) + geom_bar(aes(x = reorder(topic, topic_sort) , fill = topic_cat)) +
+  scale_fill_manual(values = 
+                      c("overfunded" = "green", 
+                        "successful" = "blue", 
+                        "failed" = "red", 
+                        "not prominent" = "grey"), "Project State") + 
+  xlab("Topic") + ylab("Frequency") + ggtitle("Distribution of Topics in Connection with State")
+
+ggplot(data = df) + geom_bar(aes(x = reorder(topic, topic_sort) , fill = state_new)) +
+  scale_fill_manual(values = 
+                      c("overfunded" = "green", 
+                        "successful" = "blue", 
+                        "failed" = "red", 
+                        "live" = "grey"), "Project State") + 
+  xlab("Topic") + ylab("Frequency") + ggtitle("Distribution of Topics in Connection with State")
+
+
+```
+
+# State Distribution
+
+```{r}
+
+df$state_new %>% as.factor() %>% summary()
+df$state_new[df$state_new != "live"] %>% as.factor() %>% summary()
+
+tmp = df[df$state_new != "live",]
+tmp$state_new %<>% as.factor()
+tmp$state_new = factor(tmp$state_new, levels = levels(tmp$state_new)[c(2,3,1)])
+
+ggplot(data = tmp[order(tmp$state_new),]) + geom_bar(aes(x = state_new , fill = state_new)) +
+  scale_fill_manual(values = 
+                      c( "failed" = "red",
+                         "successful" = "blue",
+                         "overfunded" = "green" 
+                       ), "Project State") + 
+  xlab("State") + ylab("Frequency") + ggtitle("Distribution of Projects' States")
+
+
+ggsave(filename = str_c(path_plots, "distr_state.png"), device = "png", plot = last_plot())
+
+
+tmp$state_new %>% summary()
+
+```
+
+
+# Creators/country dataset
+
+```{r}
+
+crt = read_csv("/home/stlk/Desktop/DigEc_scripts/mongo_exp/creators_united.csv")
+t = read_csv("/home/stlk/Desktop/DigEc_scripts/mongo_exp/creators_with_time.csv")
+t %<>% group_by(id, creator_id) %>% arrange(desc(state_changed_at)) %>% filter(row_number() == 1)
+
+crt = merge(crt %>% dplyr::select(-state_changed_at), t, by = c("id", "creator_id"))
+crt$state_changed_at %<>% as_datetime()
+
+
+```
+
+# Descriptives
+
+```{r}
+
+crt$creator_id %>% unique() %>% as.factor() %>% length()
+
+# dfc$location_country %>% as.factor() %>% summary()
+# dfc$category_name %>% as.factor() %>% summary()
+
+# dfc$id %>% as.factor() %>%  unique() %>% length() %>% signif(digits = 15)
+# dfc$creator_id %>% as.factor() %>%  unique() %>% length() %>% signif(digits = 15)
+
+```
+
+
+# Merging creators with main dataset
+
+```{r}
+
+dfc = left_join(df, 
+                crt %>% dplyr::select(-group), by = "id")
+
+
+dfc$state_changed_at %<>% as.character() %>% lubridate::as_datetime()
+
+dfc %<>% group_by(creator_id) %>% arrange(state_changed_at, .by_group = T)
+
+dfc$creator_id[dfc$state_new != "live"] %>% unique() %>% as.factor() %>% length()
+
+# save(file = "/home/stlk/Desktop/DigEc_scripts/df_with_creators.RData", list = c("dfc"))
+
+```
+
+# Number of creators
+
+```{r}
+
+dfc$creator_id[dfc$state_new != "live"] %>% unique() %>% as.factor() %>% length()
+
+```
+
+
+# Making experience variable
+
+```{r}
+
+dfc = dfc[!duplicated(dfc$id), ]
+crt_ids = dfc$creator_id[duplicated(dfc$creator_id)]
+
+## generate number of row per creator
+
+dfc %<>% group_by(creator_id) %>% mutate(exp = row_number(state_changed_at))
+
+```
+
+
+# Countries
+
+```{r}
+
+dfc$location_country[dfc$state_new %in% c("successful", "overfunded", "failed")] %>% as.factor() %>% summary()
+
+# dfc[dfc$state_new %in% c("successful", "overfunded", "failed"),] %>% ungroup() %>% count(location_country) %>% View()
+
+dfc[dfc$state_new %in% c("successful", "overfunded", "failed"),] %>%
+  ungroup() %>% 
+  count(location_country) %>% arrange(desc(n)) %>% na.omit() %>% top_n(20, n) %>% 
+  ggplot() + geom_col(aes(x = reorder(location_country, -n), y = n)) + coord_flip() +
+  xlab("Country") + ylab("Count") + ggtitle("Distribution of Projects across Countries")
+
+ggsave(filename = str_c(path_plots, "distr_country.png"), device = "png", plot = last_plot())
+
+```
+
+
+# Funders
+
+
+```{r}
+
+dfc$exp[dfc$state_new != "live"] %>% as.factor() %>% summary() / (length(dfc$creator_id[dfc$state_new != "live"] %>% unique() %>% as.factor()))
+
+
+# entrepreneurs with more than 1 project
+
+plt$exp_act %>% summary()
+
+# plt$exp_act = ifelse(plt$exp <= q[3], "young", 
+#                      ifelse(plt$exp %in% (4:8), "experienced", "overexp"))
+
+
+```
+
+
+## one-time
+
+
+```{r}
+
+
+
+```
+
+
+
+## serial
+
+
+```{r}
+
+
+
+```
+

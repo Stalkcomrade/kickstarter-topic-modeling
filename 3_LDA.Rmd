@@ -1,0 +1,238 @@
+---
+title: "3_LDA"
+output: html_document
+---
+
+```{r}
+
+library(quanteda)
+library(tidyr)
+library(topicmodels)
+library(tidytext)
+library(dplyr)
+library(stringr)
+library(LDAvis)
+library(servr)
+library(magrittr)
+library(readr)
+
+
+```
+
+
+
+```{r}
+
+word_counts <- corp_new %>%
+  count(text, words, sort = TRUE) %>%
+  ungroup()
+
+stories_dtm <- word_counts %>%
+  cast_dtm(text, words, n)
+
+save(file = str_c(sample_path,"stories_dtm.RData"), list = c("stories_dtm"))
+
+```
+
+# LDA
+
+```{r}
+
+ap_lda = LDA(stories_dtm,
+             k=10,
+             control = list(seed = 1234, verbose=TRUE))
+
+```
+
+# Main matrices
+
+```{r}
+
+load("ap_lda.RData")
+
+
+ap_lda_td <- tidy(ap_lda) # превращаем результаты моделирования в датасет: первая колонка -- номер топика (их у нас 50), вторая -- токен, третья -- вероятность
+ap_gamma <- tidy(ap_lda, matrix = "gamma") # делаем документ-топик датасет: первая колонка -- номер документа,вторая -- номер топика, третья -- вероятность
+
+readr::write_csv(str_c(lda_path, "ap_lda_td.csv"),
+                 x = ap_lda_td)
+readr::write_csv(str_c(lda_path, "ap_gamma.csv"),
+                 x = ap_gamma)
+
+```
+
+
+```{r}
+
+corp_new_blurb = read_csv(str_c(sample_path, "corp_new_blurb.csv"))
+
+corp_new_blurb$blurb = corp_new_blurb$blurb %>% as.character() # делаем текстовую переменную
+
+myDfm = quanteda::dfm(corp_new_blurb$blurb, stem = T, removeNumbers = TRUE, 
+            ignoredFeatures  = add$words, removePunct = TRUE, language = "english")
+
+## SERVER
+
+# wordcounts = myDfm %>% tidy() %>% group_by(term) %>% filter(term %in% vocabulary) %>% summarise(n=sum(count)) 
+
+corp_new_blurb = NULL
+
+# создаем document-feature matrix, в которой пересечения между нашими токенами и документами, при помощи аргумента stem проводим стемминг (приводим слова к основе), а при помощи аргумента remove удаляем стоп-слова
+
+
+```
+
+
+
+```{r}
+
+ap_lda_td = read_csv(str_c(lda_path, "ap_lda_td.csv"))
+ap_gamma = read_csv(str_c(lda_path, "ap_gamma.csv"))
+corp_new = read_csv(str_c(sample_path, "y_mongo_blurb_state.csv"))
+
+
+topic.per.word = ap_lda_td %>% spread(topic, beta) # делаем матрицу, строчки -- токены, столбцы -- топики, на пересечении -- вероятность
+
+vocabulary = topic.per.word$term
+vocabulary = as.character(vocabulary)
+
+topic.per.word = as.data.frame(topic.per.word)
+
+# change NAs
+
+topic.per.word$term[is.na(topic.per.word$term)] = ""
+
+rownames(topic.per.word) = topic.per.word$term
+topic.per.word = select(topic.per.word,-1) %>% t() %>% as.matrix() # теперь у нас есть матрица, в которой строчки -- топики, столбцы -- токены, на пересечении -- вероятность
+
+topic.per.doc = ap_gamma %>% spread(topic, gamma)
+
+topic.per.doc %<>% as.data.frame()
+
+rownames(topic.per.doc) = topic.per.doc$document
+topic.per.doc = select(topic.per.doc,-1) %>% as.matrix() # а это вторая важная матрица для нас, в которой строчки -- документы, столбцы -- топики, пересечение -- вероятность
+
+doc.length = corp_new %>% group_by(text) %>% count()
+doc.length = doc.length$n
+
+
+####
+
+
+save.image(str_c(lda_path, "topic_doc_words.RData"))
+
+```
+
+
+
+# Making one topic per document
+
+
+```{r}
+
+ap_gamma = read_csv(str_c(lda_path, "ap_gamma.csv"))
+
+ap_gamma_cut = ap_gamma %>% group_by(document) %>% 
+  top_n(1, wt = gamma)
+
+# df[df$document == 58510,] %>% View()
+
+```
+
+
+## Joining with meta
+
+
+```{r}
+
+corp_new_full = read_csv(str_c(sample_path, "y_mongo_blurb_state.csv"))
+df = left_join(ap_gamma_cut, corp_new_full, by = c("document" = "text"))
+
+write_csv(str_c(sample_path, "corp_new_topics.csv"), x = df)
+
+```
+
+
+
+# Alternative
+
+```{r}
+
+save(file = str_c(lda_path, "word_counts.RData"), list = c("word_counts", "vocabulary", "myDfm" ))
+
+
+### SERVER
+
+# wordcounts_alt = word_counts %>% group_by(words) %>% filter(words %in% vocabulary) %>% summarise(n = sum(n))
+# wordcounts = myDfm %>% tidy() %>% group_by(term) %>% filter(term %in% vocabulary) %>% summarise(n=sum(count)) 
+
+###
+
+load(str_c(lda_path, "word_counts.RData"))
+
+# wordcounts_alt = read_csv(str_c(lda_path, "word_counts_alt.csv"))
+
+# corp_new = corp_new %>%
+#   unnest_tokens(words,
+#                 full_text,
+#                 to_lower = T)
+
+
+# doc.length = corp_new %>% group_by(text) %>% count()
+# doc.length = doc.length$n
+
+
+```
+
+## LDAvis
+### Main version
+
+```{r}
+
+# размер кружка показывает, сколько процентов текстового корпуса на него приходитсядистанция также важна; чем ближе топики, тем они более похожи друг на друга
+
+topic.per.word[topic.per.word==0] = 0.00000000000000001 #немного редактируем матрицу, чтобы все работало
+
+json <- createJSON(phi = topic.per.word, theta=topic.per.doc,
+doc.length=doc.length, vocab=vocabulary, term.frequency=wordcounts$n)
+
+```
+
+
+
+## Alt version
+
+```{r}
+
+json <- createJSON(phi = topic.per.word, theta=topic.per.doc,
+doc.length=doc.length, vocab=vocabulary, term.frequency=wordcounts_alt$n)
+
+serVis(json, out.dir="lda100", open.browser=TRUE)
+
+```
+
+# Добавляю метаданные
+
+```{r}
+
+# assignments <- augment(ap_lda, data = stories_dtm)
+# 
+# corp_new_meta$text %<>% as.character()
+# wmeta = left_join(assignments,
+#                     distinct(corp_new_meta, text, .keep_all = T),
+#                   by = c("document" = "text"))
+
+
+# write_csv("/home/stlk/Desktop/DigEc_data_samples/wmeta.csv", x = wmeta)
+
+
+
+```
+
+
+```{r}
+
+# save.image(compress = "xz", file = "~/share/research/polit_primeriz/lda_3.RData")
+
+```
+

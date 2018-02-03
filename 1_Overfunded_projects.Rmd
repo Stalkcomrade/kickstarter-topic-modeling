@@ -1,0 +1,948 @@
+---
+title: "1_Overfunded_projects"
+output: html_document
+---
+
+```{r}
+
+library(tidyverse)
+library(magrittr)
+library(lubridate)
+library(quanteda)
+library(tidyr)
+library(topicmodels)
+library(tidytext)
+library(dplyr)
+library(stringr)
+library(LDAvis)
+library(servr)
+library(readr)
+library(ggplot2)
+library(corrplot)
+library(gridExtra)
+
+sample_path = "/home/stlk/Desktop/DigEc_data_samples/"
+# sample_path = "/home/stlk/Desktop/DigEc_data_full/"
+lda_path = "/home/stlk/Desktop/DigEc_scripts/lda/"
+path_plots = "/home/stlk/Desktop/DigEc_scripts/plots/"
+over_path = "/home/stlk/Desktop/DigEc_scripts/over_lda/"
+
+
+```
+
+
+```{r}
+
+corp_new = read_csv(str_c(over_path, "y_mongo.csv"))
+
+# deleting NAs
+corp_new = corp_new[!is.na(corp_new$id),]
+
+# Time
+
+corp_new$state_changed_at %<>% as_datetime()
+
+
+```
+
+
+## Finding duplicates
+
+
+```{r}
+
+# corp_new[corp_new$id == 171220704,] %>% View()
+
+corp_new = corp_new %>% arrange(id, desc(state_changed_at))
+
+# deleting duplicates
+
+corp_new = corp_new[!duplicated(corp_new$id),]
+
+
+# corp_new[duplicated(corp_new$id),] %>% head()
+
+# corp_new %>% filter(duplicated(.[["id"]])) %>% group_by(id) %>% distinct(state_changed_at, .keep_all = T) %>% head()
+
+```
+
+
+
+```{r}
+
+corp_new$text = 1:nrow(corp_new)
+
+corp_new$difference = as.numeric(corp_new$pledged) - as.numeric(corp_new$goal)
+corp_new = corp_new[!is.na(corp_new$difference),]
+
+
+```
+
+
+
+
+```{r}
+
+
+ggplot(data = corp_new %>% dplyr::filter(state == "successful")) + 
+  geom_histogram(aes(x = difference))
+
+
+quantile(corp_new %>% dplyr::filter(state == "successful") %$% difference, 
+         probs = seq(0.75, 0.99, by = .01))
+
+
+nrow(corp_new[corp_new$difference >= 10000,])
+
+```
+
+
+# Making new state labels
+
+_check
+```{r}
+
+
+corp_new$state_new = ifelse(corp_new$difference >= 10000, "overfunded", corp_new$state)
+# corp_new$state[corp_new$difference < 10000] %>% head()
+
+
+# write_csv(str_c(over_path, "y_mongo.csv"), x = corp_new)
+
+```
+
+
+```{r}
+
+corp_new = read_csv(str_c(over_path, "y_mongo.csv"))
+
+```
+
+
+# Replace reg
+
+```{r}
+
+corp_new = corp_new[which(!grepl("[^\x01-\x7F]+", corp_new$blurb)),]
+corp_new = corp_new[which(!grepl("[^\u0001-\u007F]+", corp_new$blurb)),]
+
+# write_csv(str_c(over_path, "y_mongo.csv"), x = corp_new)
+
+```
+
+
+# making csv with meta
+
+```{r}
+
+corp_new_meta = corp_new %>% dplyr::select(id, blurb, state, state_new)
+corp_new_blurb = corp_new %>% dplyr::select(id, text, blurb)
+corp_new = corp_new %>% dplyr::select(text, blurb)
+
+write_csv(str_c(over_path, "corp_new_meta.csv"), x = corp_new_meta)
+write_csv(str_c(over_path, "corp_new_blurb.csv"), x = corp_new_blurb)
+write_csv(str_c(over_path, "corp_new_text.csv"), x = corp_new)
+
+corp_new_blurb = NULL
+corp_new_meta = NULL
+
+
+```
+
+
+```{r}
+
+corp_new = corp_new %>%
+  unnest_tokens(words,
+                blurb,
+                to_lower = T,
+                token = "regex",
+                pattern = "[^A-Za-z\\s]")
+
+corp_new$words %<>% stringr::str_trim(side = "both")
+
+
+```
+
+# Stop words
+
+
+```{r}
+
+stop_words = data.frame(words = c(""), 
+                        lexicon = "my_dict")
+
+
+stop_words_default = read_tsv("stop_words.txt")
+stop_words_default$lexicon = "default"
+
+corp_new <- corp_new %>%
+  anti_join(stop_words_default, by = "words")
+
+
+```
+
+  
+### Increasing vocab of stop-words
+## To find the most frequent words to delete
+
+## StopWords Default (120)
+
+```{r}
+
+add = corp_new %>%
+  count(words, sort = TRUE) %>% head(n = 120)
+
+colnames(add) = c("words", "lexicon")
+add$lexicon = rep("my_dict", nrow(add))
+
+
+```
+
+## Stopwords customised
+
+```{r}
+
+add = read_csv(str_c(sample_path, "add.csv"))
+
+colnames(add) = c("words", "lexicon")
+add$lexicon = rep("my_dict", nrow(add))
+
+```
+
+
+```{r}
+
+add = rbind(add, stop_words)
+
+corp_new <- corp_new %>%
+  anti_join(add, by = "words")
+
+
+```
+
+
+## Customised add
+
+```{r}
+
+word_counts <- corp_new %>%
+  count(text, words, sort = TRUE) %>%
+  ungroup()
+
+stories_dtm <- word_counts %>%
+  cast_dtm(text, words, n)
+
+save(file = str_c(over_path,"stories_dtm.RData"), list = c("stories_dtm"))
+
+
+```
+
+
+## Auto add (120 words)
+
+```{r}
+
+word_counts <- corp_new %>%
+  count(text, words, sort = TRUE) %>%
+  ungroup()
+
+stories_dtm <- word_counts %>%
+  cast_dtm(text, words, n)
+
+save(file = str_c(over_path,"stories_dtm_120.RData"), list = c("stories_dtm"))
+
+```
+
+
+```{r}
+
+load(file = str_c(over_path,"stories_dtm_120.RData"))
+
+word_counts$n[word_counts$words == "month"]
+
+```
+
+
+# LDA
+
+```{r}
+
+ap_lda = LDA(stories_dtm,
+             k=10,
+             control = list(seed = 1234, verbose=TRUE))
+
+```
+
+
+
+```{r}
+
+x = 20
+x = 15
+x = 7
+
+x = 10
+
+```
+
+# Main matrices
+
+```{r}
+
+
+load(str_c(over_path, "ap_lda_",x,".RData"))
+
+ap_lda_td <- tidy(ap_lda) # превращаем результаты моделирования в датасет: первая колонка -- номер топика (их у нас 50), вторая -- токен, третья -- вероятность
+ap_gamma <- tidy(ap_lda, matrix = "gamma") # делаем документ-топик датасет: первая колонка -- номер документа,вторая -- номер топика, третья -- вероятность
+
+readr::write_csv(str_c(over_path, "ap_lda_td_",x,".csv"),
+                 x = ap_lda_td)
+readr::write_csv(str_c(over_path, "ap_gamma_",x,".csv"),
+                 x = ap_gamma)
+
+```
+
+
+```{r}
+
+corp_new_blurb = read_csv(str_c(over_path, "corp_new_blurb.csv"))
+
+corp_new_blurb$blurb = corp_new_blurb$blurb %>% as.character() # делаем текстовую переменную
+
+myDfm = quanteda::dfm(corp_new_blurb$blurb, stem = T, removeNumbers = TRUE, 
+            ignoredFeatures  = add$words, removePunct = TRUE, language = "english")
+
+## SERVER
+
+# wordcounts = myDfm %>% tidy() %>% group_by(term) %>% filter(term %in% vocabulary) %>% summarise(n=sum(count)) 
+
+corp_new_blurb = NULL
+
+# создаем document-feature matrix, в которой пересечения между нашими токенами и документами, при помощи аргумента stem проводим стемминг (приводим слова к основе), а при помощи аргумента remove удаляем стоп-слова
+
+
+```
+
+
+
+```{r}
+
+ap_lda_td = read_csv(str_c(over_path, "ap_lda_td.csv"))
+ap_gamma = read_csv(str_c(over_path, "ap_gamma.csv"))
+corp_new = read_csv(str_c(over_path, "y_mongo_blurb_state.csv"))
+
+
+topic.per.word = ap_lda_td %>% spread(topic, beta) # делаем матрицу, строчки -- токены, столбцы -- топики, на пересечении -- вероятность
+
+vocabulary = topic.per.word$term
+vocabulary = as.character(vocabulary)
+
+topic.per.word = as.data.frame(topic.per.word)
+
+# change NAs
+
+topic.per.word$term[is.na(topic.per.word$term)] = ""
+
+rownames(topic.per.word) = topic.per.word$term
+topic.per.word = select(topic.per.word,-1) %>% t() %>% as.matrix() # теперь у нас есть матрица, в которой строчки -- топики, столбцы -- токены, на пересечении -- вероятность
+
+topic.per.doc = ap_gamma %>% spread(topic, gamma)
+
+topic.per.doc %<>% as.data.frame()
+
+rownames(topic.per.doc) = topic.per.doc$document
+topic.per.doc = select(topic.per.doc,-1) %>% as.matrix() # а это вторая важная матрица для нас, в которой строчки -- документы, столбцы -- топики, пересечение -- вероятность
+
+doc.length = corp_new %>% group_by(text) %>% count()
+doc.length = doc.length$n
+
+
+####
+
+
+save.image(str_c(over_path, "topic_doc_words.RData"))
+
+```
+
+
+
+# Making one topic per document
+
+
+```{r}
+
+ap_gamma = read_csv(str_c(over_path, "ap_gamma_",x, ".csv"))
+
+ap_gamma_cut = ap_gamma %>% group_by(document) %>% 
+  top_n(1, wt = gamma)
+
+# df[df$document == 58510,] %>% View()
+
+```
+
+
+## Joining with meta
+
+
+```{r}
+
+corp_new_full = read_csv(str_c(over_path, "y_mongo.csv")) %>% dplyr::select(-goal,-pledged, -state_changed_at)
+df = left_join(ap_gamma_cut, corp_new_full, by = c("document" = "text"))
+
+write_csv(str_c(over_path, "corp_new_topics_", x, ".csv"), x = df)
+
+```
+
+
+
+# Reading data
+
+```{r}
+
+df = read_csv(str_c(over_path, "corp_new_topics_",x, ".csv"))
+
+```
+
+# Chi-square
+## State
+
+```{r}
+
+df$state %>% as.factor %>% summary()
+df = df[df$state != "suspended" & df$state != "canceled",]
+df = df[df$state_new != "suspended" & df$state_new != "canceled",]
+
+df_chi = chisq.test(table(df$state, df$topic))
+df_observed = as.data.frame(df_chi$observed)
+df_resid = as.data.frame(df_chi$residuals)
+
+```
+
+
+## New_state
+
+
+```{r}
+
+df_chi = chisq.test(table(df$state_new, df$topic))
+df_observed = as.data.frame(df_chi$observed)
+df_resid = as.data.frame(df_chi$residuals)
+
+
+```
+
+
+```{r}
+
+p6 <- ggplot() +
+  geom_tile(data = df_resid, aes(x = Var2, y = Var1, fill = Freq)) +
+  geom_text(data = df_observed, aes(x = Var2, y = Var1, label = Freq), size = 3) +
+  theme_bw() +
+  scale_fill_gradient2("Pearson\nresiduals", 
+                       low = "#b2182b", mid = "#f7f7f7", high = "#2166ac", 
+                       midpoint = 0, breaks = seq(-5, 25, 5)) +
+  theme(axis.text.x = element_text(angle = 90)) + 
+  ggtitle(label = "Chi-square test: Topics and Project State",
+                  subtitle = str_c("P-Value:", signif(df_chi$p.value, 2))) + 
+  xlab("Topic") + ylab("Project's State")
+  
+p6
+
+ggsave(str_c(path_plots,"states_chisq_overfunded_", x, ".png"), 
+       plot = p6, device = "png", dpi = 300, width = 15, height = 15, scale = .5)
+
+
+
+```
+
+
+
+```{r}
+
+ap_gamma = read_csv(str_c(over_path, "ap_gamma.csv"))
+corp_new_full = read_csv(str_c(over_path, "y_mongo.csv")) %>% dplyr::select(state, state_new, text)
+df = left_join(ap_gamma_cut, corp_new_full, by = c("document" = "text"))
+
+# df %>% dplyr::select(state, state_new, topic)
+
+```
+
+## Inspecting topics
+
+
+## Blurb, topic, state
+
+```{r}
+
+df %>% filter(topic == 1) %>% arrange(desc(gamma)) %$% head(blurb, 10)
+df %>% filter(topic == 7 & state == "successful") %>% arrange(desc(gamma)) %>% head(30) %>% View()
+
+```
+
+
+```{r}
+
+topic_projects = df %>% group_by(topic) %>% top_n(10, gamma) %>% ungroup() %>% arrange(topic, -gamma)
+
+
+topic_projects %>% dplyr::select(topic, description = blurb) %>% knitr::kable(align = "lr", longtable = T)
+
+```
+
+
+## 30 words per topic
+
+```{r, message=FALSE}
+
+ap_lda_td = read_csv(str_c(over_path, "ap_lda_td_",x,".csv"))
+
+ap_lda_td %<>% 
+  group_by(topic, term) %>% 
+  summarise(n = n())
+
+ap_lda_td %<>% group_by(term) %>% mutate(total = sum(n))
+
+ap_lda_td$total %>% summary()
+
+# %>% 
+  ungroup() %>% group_by(topic, .add = T) %>% 
+  arrange(desc(n), .by_group = T) %$% summary(n)
+
+
+topic.words = ap_lda_td %>% 
+  group_by(topic) %>% 
+  top_n(50, wt = beta) %>% 
+  ungroup() %>% 
+  arrange(topic, -beta)
+
+top_words = topic.words %>% group_by(topic) %>% mutate(top_words = stringr::str_c(term, collapse = ", "))
+top_words = top_words[!duplicated(top_words$topic),] %>% dplyr::select(-beta, -term)
+  
+knitr::kable(top_words, align = "lr", longtable = T)
+
+```
+
+<!-- # Procedure description -->
+
+<!-- 1) English stop-words [link:https://github.com/igorbrigadir/stopwords/blob/master/en/snowball_original.txt] were deleted.       -->
+<!-- * Additionally, 120 most frequent words were deleted from the text corpus. -->
+<!-- 2) Texts are only in English -->
+
+
+<!-- # LDA description -->
+
+<!-- LDA is a probabilistic algorithm, which in practices means that, for instance, two documents (project descriptions) obtain non-zero probabilities to contain or be described by ** all of the Topics **. In order to calculate chi-square for every project description only one Topic having highest probability is chosen.  -->
+
+<!-- It is indicated in the literature that decision on the amount of Topics used, eventually, should be done by the researcher, despite the fact there are analytical tools for approaching the "optimal" number of Topics. In the case of the Kickstarter blurbs, the increase in number of Topics will lead to a better attribution of each document to it's thematical nature. Hitherto, the task of the classification is better accomplished when number of Topics is high. Meanwhile, the main drawback is that it also leads to the loss of the aggregated information - information about the common patterns used across these projects.  -->
+
+<!-- # Chi-square test description -->
+
+<!-- Chi-square test indicates, whether the frequencies of topic-state combinations differ from the expected frequencies (which assumed to be uniform). Pearson residuals indicate the level of a combination frequency exceeds (positive residuals) or fails to reach (negative residuals) expected frequencies. Thus, that rectangles coloured red demonstrate topics, which are less prominent for a given state of the project, while blue colour indicate which topics are typical for a given state. Neuitraly colored are combinations' frequencies, which nearly equals to the expected frequencies, indicating no particular pattern.    -->
+
+<!-- While some of the top words reflect the content of the topics, others might be a valuable source for depicting strategic orientation used by founders to succeed in campainges. Generally, results of LDA Topic Modeling are hardly interpretable in terms of content (there will be no Topics like "robotics", then, "movies" - one might achieve this deep diversification by dramatically increasing number of Topics), rather, better understand each Topic as the latent linguistic embodiment of strategies used by founders.  -->
+
+<!-- # Figure 1 description -->
+
+<!-- One the main result is that there is no overlapping between topics positively prominent for overfunded or just successful projects, which might indicate a major difference in how they are presented.  -->
+
+<!-- Heretofore, topics prominently and strongly expressed for the generally successful projects are 2, 4, 5. Meanwhile, Topics 3, 6, 8 and 9 are also have frequencies higher than expected, however, there is less confidence about this. -->
+
+<!-- Topic 10 and 1 have the positive pearson residuals in the state of failed projects, at the same time being less than expected connected with both overfunded and successful projects. The former is less expressed in the projects, which gathered amount of money slightly above requested, while the latter is far less typical for the virally successful projects. -->
+
+<!-- In order to get more confidence about this simplistic connectivity inference, one needs to compare whether topics majorly presented in the successfull states are less prominent in the failed once. -->
+
+<!-- Following this logic, Topics 8 and 9 are cannot be uniquely articulated on the overfunded projects, till they are slightly prominent in the projects which failed to raise amount of money requested. -->
+
+
+# 23456
+
+Overfunded 
+Positive: 2 4 3(?) 
+Neagtive: 5
+
+Topic 2 is the most reliable source for the insights about strategies used by overfunded projects' founders, since it is not typical for the successful or failed projects. Source for the additional information is Topic 4, but it appears as well in successful blurbs. 
+
+Successful:
+5 (overfunded, failed)
+6 (failed)
+3 (overfunded)
+
+Topic 5 is used to gain insights about successful projects, since it is presented far less than exptected both in overfunded and failed projects. Topics 3 and 6 follows the same logic.
+
+Failed:
+Positive: 1 (overfunded) and 10 (successful)
+
+Key Topic to describe reasons of the project failure is 1; Topic 10 provides only partial evidences (pearson residuals are close to 0).
+
+Other topics will not be described in details, since there is no evidence to articulate the connection between them and state of the projects.
+
+1 Topic - "In the Name of Fun"
+
+```{r}
+
+df %>% filter(topic == 1) %>% arrange(desc(gamma)) %$% head(blurb, 10)
+top_words$top_words[top_words$topic == 1]
+
+df[df %$% str_detect(blurb,  "months"),] %>% filter(topic == 1) %>% View()
+
+```
+
+Failed
+
+"Dron collector (f), t-shirts and sex stories" - diverse
+
+While acts of gratitude are expressed ("thanks for your support"), it belongs to the end of list, being not really typical term. "Hey guys" being an appealing to the potential backers, is in fact imformal, having no connotations anyhow connected with the bussiness environment. Additional  support for the topic interpretation is "funny" term, describing products with absence of real instrumental purpose. From the different site of view, some of the, of course, are successfuly supported, which means that community of backers are differentiated in terms of motivation to support Kickstarter projects.
+
+2 Topic - "Combined Strategies"
+
+```{r}
+
+df %>% filter(topic == 2) %>% arrange(desc(gamma)) %$% head(blurb, 10)
+top_words$top_words[top_words$topic == 2]
+
+df[df %$% str_detect(blurb,  "months"),] %>% filter(topic == 2) %>% View()
+
+```
+
+Overfunded
+
+While projects from the 2 Topic are generally better described, still, they are dedicated to the various thematics. One of the top terms "months" majorly appears in the context of telling potential backers how much effort have already been contributed to the projects. Similiarly, it also appears as indicatior of the amount of time needed for project to be finished. Thus, it is aimed to reduce the uncertainty and assymetry of the information [link]. Additionaly, founders of the projects gives better description of the project essentials: "this is a". Prominence of terms like "need your help" indicate that founders exploit product-based strategy and simultaneously taking care about backers, indicating their role in the whole process. Before, it was already mentioned in the connection with virally successfull crowdfunded project [link], recent results go accordingly with the previous studies.
+
+3 Topic: "Style and Community Based Strategy"
+
+```{r}
+
+df %>% filter(topic == 3) %>% arrange(desc(gamma)) %$% head(blurb, 10)
+top_words$top_words[top_words$topic == 3]
+df[df %$% str_detect(blurb,  "Hello Everyone"),] %>% filter(topic == 3) %>% View()
+
+```
+
+Successful
+Overfunded negative
+
+Thematicly, this Topic is diverse, but main canvas is about focusing on the individualisation of the usual items, providing unique customer experience [link here]. The moderate success of these projects is the one of the signals of new economies, where technologies whcih provides ways for the customisation draw considerable attention of the public. Founders use single strategy, seeing persistent and strong ties with the community of the backers to be the main source of the pledges for projects in current Topic.
+
+# Another category is about fast-paced games. "One man" - stories about anonymised someone - make customer associate the hero with himself.
+
+"stylish", "jazz", "romance", "body"
+"we are", "support", "help us", "be a part of it"
+"paced", "one man"
+"Hello e/Everyone" - is a really unsuccessful way to begin
+
+4 Topic: "Combined Strategies II"
+
+```{r}
+
+df %>% filter(topic == 4) %>% arrange(desc(gamma)) %$% head(blurb, 10)
+top_words$top_words[top_words$topic == 4]
+df[df %$% str_detect(blurb,  "I can"),] %>% filter(topic == 4) %>% View()
+
+```
+
+Overfunded
+Failed negatively 
+
+Project focused on the interpretation or comprehension of modernity. Mostly journalistically-oriented projects like films and books. 
+
+Another percularity is that projects from 4 Topic indicate the current state of the project, how much efforts were already been dedicated to the project, which gives an impression of project is nearly done and little help is needed to succeed - "it is all the way to post-production". That might be the reason of overfundness. 
+
+Limitness is another technique used by other in current project category, which goes in connection with personalised expereince [link to limitness in economy].
+
+"And you" - appealing to the potential fund raiser with a reward promise or indicating the coparticipation of the fund raiser in the slogan.
+
+While usually projects connected with this topic are overfunded, there is no single overfunded projects where a founder indicated himself in the blurb like "I produce different forms of art and seek to".
+
+"st century, ages, books, years in the making, limited edition, home, page, folk, explore, together, production, i can, and you"
+
+5 Topic: "Emulating Project-Oriented Strategy and Orientation on Community"
+
+
+```{r}
+
+df %>% filter(topic == 5) %>% arrange(desc(gamma)) %$% head(blurb, 10)
+top_words$top_words[top_words$topic == 5]
+df[df %$% str_detect(blurb,  "now it"),] %>% filter(topic == 5) %>% View()
+
+```
+
+Successful
+
+"Now it" term is used as the starting point to remind to the potential contributor about his role in the success."and we need your help" exploites the same logic, demonstrating role of the founder to be crucial.
+
+One of the terms, which is less prominent but interesting based on the theory is sharing [link]. "Need your help to share it" - orientation given depicts others to loose something valuable in the future and in order not to allow this, the project is needed to be shared via one of the social platforms. This is purely community-based strategy.
+
+At the same time, term "high quality" might recall a temptation to lable this strategy as the product-based. Nevertheless, projects in these Topic have lack of the rich description of the project essences. Usage of term "high quality" might be a cheap, though, evidently, less strong signal for backers. 
+
+6 Topic: "Referencing Strategy and the Dark Side of the Backers' Maturnity"
+
+```{r}
+
+df %>% filter(topic == 6) %>% arrange(desc(gamma)) %$% head(blurb, 10)
+top_words$top_words[top_words$topic == 6]
+df[df %$% str_detect(blurb,  "coming soon"),] %>% filter(topic == 6) %>% View()
+
+```
+
+"we can, a simple, win, profit"
+
+Successful, but less
+Failed negative
+
+"We can" construction works better, thant mentioning yourself. It signalise to the potential found raiser that there is a collective of people behind the project, not a single one. Found raisers must trust more to the collective than to the single person [link - collectives are more trustworth].
+
+Simplicity might be another signal used to achieve trust in Kickstarter. While community of backers becoming more experienced, they might be more confidenet that simplicity in combination with original idea has more chances to be completed and delivered [link].
+
+# Profit - non-profit organisations, thematic.
+
+"Award-winning" - used to connect current project to one already exists, using it's popularity as the source or proof of the concept [link].
+
+
+7 Topic
+
+Live
+Successful negative
+
+```{r}
+
+df %>% filter(topic == 7) %>% arrange(desc(gamma)) %$% head(blurb, 10)
+top_words$top_words[top_words$topic == 7]
+df[df %$% str_detect(blurb,  "I am"),] %>% filter(topic == 7) %>% View()
+
+```
+
+"project, hours, anti, goal, if you, i am a, we have, limited, donate"
+"is pleased to present its third Kickstarter project" indicator of experience
+
+
+8 Topic
+
+Overfunded, less
+Failed, significantly low
+
+```{r}
+
+df %>% filter(topic == 8) %>% arrange(desc(gamma)) %$% head(blurb, 10)
+top_words$top_words[top_words$topic == 8]
+df[df %$% str_detect(blurb,  "I can"),] %>% filter(topic == 8) %>% View()
+
+```
+
+
+"cd, ios, science, stories, years ago, an all, custom, a full, movies, men, learn, today, you don"
+
+9 Topic
+
+Overfunded
+
+```{r}
+
+df %>% filter(topic == 9) %>% arrange(desc(gamma)) %$% head(blurb, 10)
+top_words$top_words[top_words$topic == 9]
+df[df %$% str_detect(blurb,  "live"),] %>% filter(topic == 9) %>% View()
+
+```
+
+"please help, but we need your help, a self, can"
+
+10 Topic
+
+Failed
+
+
+```{r}
+
+df %>% filter(topic == 10) %>% arrange(desc(gamma)) %$% head(blurb, 10)
+top_words$top_words[top_words$topic == 10]
+df[df %$% str_detect(blurb,  "community"),] %>% filter(topic == 10) %>% View()
+
+df$blurb[df$document == 28452]
+
+```
+
+Topic 10 "Loss"
+
+One notable feature about this Topic is that considerable part of it's content is connected with the loss stories ("A young widow and mother invites you inside to share her intimate journey of love, loss, faith, hope and triumph over grief").
+In addition, most of the projects are represented in the blurb as product-based and pay little or no attention to the both potential backer as the key agent for the project to succeed. The absence of clear purposness and instrumental value might articulated in the blurb allenate potential backers.
+
+## Plots comparing word frequencies between topics
+
+### 2 and 5
+Overfunded and Successful
+
+```{r}
+
+align = .65
+
+g = topic.words %>% group_by(topic) %>% top_n(30, beta) %>% filter(topic %in% c(2,5)) %>% ungroup() %>%  mutate(term = reorder(term, -beta),
+        color = ifelse(term %in% c("i need your help", "months", "is a"), "red", 
+           ifelse(term %in% c("now it", "and we need your help", "share", "high quality"), 
+                  "blue", "black")))
+
+t25 = arrangeGrob(g %>% filter(topic == 2) %>% ungroup() %>%  mutate(term = reorder(term, -beta)) %>% 
+  ggplot(aes(term, beta, fill = "red")) + geom_col(show.legend = FALSE) + 
+  theme(axis.text.y = element_text(colour = g$color)) + 
+  coord_flip() + 
+    ggtitle("Prominent Words for Topic 2 \n 'Combined Strategies' ") + 
+    theme(plot.title = element_text(hjust = align + .2)), 
+  g %>% filter(topic == 5) %>% ungroup() %>%  mutate(term = reorder(term, -beta)) %>% 
+  ggplot(aes(term, beta)) + geom_col(show.legend = FALSE, fill = "blue") + 
+  theme(axis.text.y = element_text(colour = g$color[31:nrow(g)])) + 
+  coord_flip() + 
+    ggtitle("Prominent Words for Topic 5 'Emulating \n Project-Oriented Strategy and \n Orientation on Community' ") + 
+     theme(plot.title = element_text(hjust = align + .5)), 
+  ncol=2)
+
+
+ggsave(filename = str_c(path_plots, "2_5_topics.png"), plot = t25, 
+       device = "png", dpi = 300, width = 15, height = 15, scale = .5)
+
+# topic.words %>% group_by(topic) %>% top_n(30, beta) %>% filter(topic %in% c(2,5)) %>% ungroup() %>%  mutate(term = reorder(term, -beta)) %>% 
+#   ggplot(aes(term, beta, fill = factor(topic))) + geom_col(show.legend = FALSE) + 
+#   theme(axis.text.y = element_text(colour = color)) + 
+#   facet_wrap(~ topic, scales = "free") + coord_flip()
+
+```
+
+### 5 and 10
+Successful and Failed
+
+```{r}
+
+g = topic.words %>% group_by(topic) %>% top_n(30, beta) %>% filter(topic %in% c(5,10)) %>% ungroup() %>%  mutate(term = reorder(term, -beta),
+        color = ifelse(term %in% c("loss", "hey"), "blue", 
+           ifelse(term %in% c("now it", "and we need your help", "share", "high quality"), 
+                  "red", "black")))
+
+t510 = grid.arrange(g %>% filter(topic == 5) %>% ungroup() %>%  mutate(term = reorder(term, -beta)) %>% 
+  ggplot(aes(term, beta, fill = "red")) + geom_col(show.legend = FALSE) + 
+  theme(axis.text.y = element_text(colour = g$color)) + 
+  coord_flip() + 
+    ggtitle("Prominent Words for Topic 5 'Emulating \n Project-Oriented Strategy and \n Orientation on Community' ") + 
+     theme(plot.title = element_text(hjust = align + .25)), 
+  g %>% filter(topic == 10) %>% ungroup() %>%  mutate(term = reorder(term, -beta)) %>% 
+  ggplot(aes(term, beta)) + geom_col(show.legend = FALSE, fill = "blue") + 
+  theme(axis.text.y = element_text(colour = g$color[31:nrow(g)])) + 
+  coord_flip() + 
+    ggtitle("Prominent Words for Topic 10 'Loss' ") + 
+     theme(plot.title = element_text(hjust = align)), ncol=2)
+
+ggsave(filename = str_c(path_plots, "5_10_topics.png"), plot = t510, 
+       device = "png", dpi = 300, width = 15, height = 15, scale = .5)
+
+
+# topic.words %>% group_by(topic) %>% top_n(30, beta) %>% filter(topic %in% c(5,10)) %>% ungroup() %>%  mutate(term = reorder(term, -beta)) %>% 
+#   ggplot(aes(term, beta, fill = factor(topic))) + geom_col(show.legend = FALSE) + 
+#   theme(axis.text.y = element_text(colour = color)) + 
+#   facet_wrap(~ topic, scales = "free") + coord_flip()
+
+
+```
+
+### 5 and 1
+#### Optional
+Successful and Failed
+
+```{r}
+
+g = topic.words %>% group_by(topic) %>% top_n(30, beta) %>% filter(topic %in% c(5,1)) %>% ungroup() %>%  mutate(term = reorder(term, -beta),
+        color = ifelse(term %in% c("funny", "hey guys"), "red", 
+           ifelse(term %in% c("now it", "and we need your help", "share", "high quality"), 
+                  "blue", "black")))
+
+grid.arrange(g %>% filter(topic == 1) %>% ungroup() %>%  mutate(term = reorder(term, -beta)) %>% 
+  ggplot(aes(term, beta, fill = "red")) + geom_col(show.legend = FALSE) + 
+  theme(axis.text.y = element_text(colour = g$color)) + 
+  coord_flip(), 
+  g %>% filter(topic == 5) %>% ungroup() %>%  mutate(term = reorder(term, -beta)) %>% 
+  ggplot(aes(term, beta)) + geom_col(show.legend = FALSE, fill = "blue") + 
+  theme(axis.text.y = element_text(colour = g$color[31:nrow(g)])) + 
+  coord_flip(), ncol=2)
+
+topic.words %>% group_by(topic) %>% top_n(30, beta) %>% filter(topic %in% c(5,1)) %>% ungroup() %>%  mutate(term = reorder(term, -beta)) %>% 
+  ggplot(aes(term, beta, fill = factor(topic))) + geom_col(show.legend = FALSE) + 
+  theme(axis.text.y = element_text(colour = color)) + 
+  facet_wrap(~ topic, scales = "free") + coord_flip()
+
+```
+
+### 2 and 1/10
+Overfunded and Failed
+
+```{r}
+
+g = topic.words %>% 
+  group_by(topic) %>% 
+  top_n(30, beta) %>% 
+  filter(topic %in% c(2,1)) %>% 
+  ungroup() %>%  
+  mutate(term = reorder(term, -beta),
+        color = ifelse(term %in% c("funny", "hey guys"), "blue",
+           ifelse(term %in% c("i need your help", "months", "is a"), "red", "black")))
+
+t21 = grid.arrange(g %>% filter(topic == 2) %>% ungroup() %>%  mutate(term = reorder(term, -beta)) %>% 
+  ggplot(aes(term, beta, fill = "red")) + geom_col(show.legend = FALSE) + 
+  theme(axis.text.y = element_text(colour = g$color[31:nrow(g)])) + 
+  coord_flip() + 
+    ggtitle("Prominent Words for Topic 2 \n 'Combined Strategies' ") + 
+     theme(plot.title = element_text(hjust = align)), 
+  g %>% filter(topic == 1) %>% ungroup() %>%  mutate(term = reorder(term, -beta)) %>% 
+  ggplot(aes(term, beta)) + geom_col(show.legend = FALSE, fill = "blue") + 
+  theme(axis.text.y = element_text(colour = g$color)) + 
+  coord_flip() + 
+    ggtitle("Prominent Words for Topic 1 \n 'In the Name of Fun' ") + 
+     theme(plot.title = element_text(hjust = align)),
+  ncol=2)
+
+ggsave(filename = str_c(path_plots, "2_1_topics.png"), plot = t21, 
+       device = "png", dpi = 300, width = 15, height = 15, scale = .5)
+
+
+# topic.words %>% group_by(topic) %>% top_n(30, beta) %>% filter(topic %in% c(2,1)) %>% ungroup() %>%  mutate(term = reorder(term, -beta)) %>% 
+#   ggplot(aes(term, beta, fill = factor(topic))) + geom_col(show.legend = FALSE) + 
+#   theme(axis.text.y = element_text(colour = color)) + 
+#   facet_wrap(~ topic, scales = "free") + coord_flip()
+
+
+```
+
+
+## Plots comparing categories between topics
+
+
+```{r}
+
+assignments %>% 
+  count(title, consensus, wt = count) %>% 
+  group_by(title) %>% 
+  mutate(percent = n / sum(n)) %>% 
+  ggplot(aes(consensus, title, fill = percent)) + 
+  geom_tile() + 
+  scale_fill_gradient2(high = "red", label = percent_format()) + 
+  theme_minimal() + 
+  theme(axis.text.x = element_text(angle = 90, hjust = 1), 
+        panel.grid = element_blank()) + 
+  labs(x = "Book words were assigned to", y = "Book words came from", fill = "% of assignments")
+
+```
+
+
+
+## Chi-square between states/topics and categories or just bar plots
+
+
+!!# Those who have links in blurb are project oriented and might have more chances to succeed!!
+  * find links with regexp
+  * compare success rate with t-test
+  * look how they are distributed across topics
+  
+!!# If contains numbers, more successful !!
+
+!!# Words used by founders through time !!
+!!# Percentage of topics for founders through time !!
+
+!!# Topics and networks !!
+
+## Country-language - how much countries are presented in only english corpus
+

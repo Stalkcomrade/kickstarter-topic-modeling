@@ -1,0 +1,451 @@
+---
+title: "words_through_time_exp"
+output: html_document
+---
+
+```{r}
+
+library(tidyverse)
+library(tidytext)
+library(magrittr)
+library(lubridate)
+library(zoo)
+library(gridExtra)
+
+
+sample_path = "/home/stlk/Desktop/DigEc_data_samples/"
+lda_path = "/home/stlk/Desktop/DigEc_scripts/lda/"
+path_plots = "/home/stlk/Desktop/DigEc_scripts/plots/"
+over_path = "/home/stlk/Desktop/DigEc_scripts/over_lda/"
+
+```
+
+
+```{r}
+
+corp_new = read_csv(str_c(over_path, "corp_new_text.csv"))
+
+corp_new = corp_new %>%
+  unnest_tokens(words,
+                blurb,
+                token = "ngrams", n = 2,
+                to_lower = T)
+
+corp_new$words %<>% stringr::str_trim(side = "both")
+
+corp_new$words = str_replace_all(corp_new$words, "[^A-Za-z\\s]", "")
+corp_new = corp_new[corp_new$words != "",]
+
+
+```
+
+
+# Stop words
+
+
+```{r}
+
+stop_words = data.frame(words = c(""), 
+                        lexicon = "my_dict")
+
+
+stop_words_default = read_tsv("stop_words.txt")
+stop_words_default$lexicon = "default"
+
+
+```
+
+
+## StopWords Default (120)
+
+```{r}
+
+add = corp_new %>%
+  count(words, sort = TRUE) %>% head(n = 50) # 160 is ok
+
+words_to_check = add[c(9, 12, 13, 18, 19, 20, 22, 23, 24, 27, 34, 36, 40, 45, 47, 48),]
+
+add = add[-c(9, 12, 13, 18, 19, 20, 22, 23, 24, 27, 34, 36, 40, 45, 47, 48),]
+
+colnames(add) = c("words", "lexicon")
+add$lexicon = rep("my_dict", nrow(add))
+
+
+```
+
+
+## Anti-join
+
+```{r}
+
+# add = rbind(add, stop_words, stop_words_default)
+
+corp_new <- corp_new %>%
+  anti_join(add, by = "words")
+
+```
+
+
+```{r}
+
+Over
+2
+4
+
+Failed
+1
+10
+
+Successful
+5
+6
+
+to_test = c("months", "is a", "need your help",
+  "production", "limited edition", "and you",
+  "hey guys", "funny",
+  "loss",
+  "now it", "share", "high quality",
+  "winning")
+
+plt_wrd = plt %>% select(document, exp_act, state_changed_at)
+
+# document == text
+## corp_new$words[corp_new$text == 67333]
+
+
+words_by_time <- corp_new %>% 
+  left_join(plt_wrd, by = c("text" = "document")) %>% 
+  count(exp_act, words) %>% 
+  ungroup() %>%
+  group_by(exp_act) %>% 
+    mutate(total_exp = sum(n)) %>% 
+  group_by(words) %>% 
+    mutate(total = sum(n)) %>%
+    ungroup() %>% 
+    rename(count = n)
+
+words_by_time = words_by_time[!is.na(words_by_time$exp_act), ]
+
+```
+
+
+```{r}
+
+words_by_time <- corp_new %>% 
+  left_join(plt_wrd, by = c("text" = "document")) %>% 
+  mutate(time_floor = floor_date(state_changed_at, unit = "halfyear")) %>% 
+  count(time_floor, exp_act, words) %>% 
+  ungroup() %>% 
+  group_by(exp_act, time_floor) %>% 
+  mutate(time_total = sum(n)) %>% 
+  group_by(words) %>% 
+  mutate(word_total = sum(n)) %>% 
+  ungroup() %>% 
+  rename(count = n) %>% 
+  filter(word_total > 30)
+
+words_by_time = words_by_time[!is.na(words_by_time$exp_act), ]
+
+```
+
+
+
+```{r}
+
+library(purrr)
+library(broom) 
+
+```
+
+
+```{r}
+
+nested_data = 
+  words_by_time %>% nest(-exp_act, -words)
+
+nested_models = nested_data %>% 
+  mutate(models = map(data, ~ glm(cbind(count, time_total) ~ time_floor, ., 
+                                  family = "binomial")))
+
+
+slopes <- nested_models %>% 
+  unnest(map(models, tidy)) %>% 
+  filter(term == "time_floor") %>% 
+  mutate(adjusted.p.value = p.adjust(p.value)) 
+
+
+top_slopes <- slopes %>% 
+  filter(adjusted.p.value < .1) %>% 
+  group_by(exp_act) %>% 
+  select(-statistic, -p.value)
+
+```
+
+
+#### !!!!!! ####
+
+```{r}
+
+pander::pander(top_slopes$exp_act %>% as.factor() %>% summary()/smr * 100)
+
+```
+
+# Random samples of result of world change
+
+```{r}
+
+
+f = function(){
+  
+  df = data.frame()
+  
+  for (i in 1:9){
+  
+  fract = str_c(".", i) %>% as.numeric()
+    
+  top_slopes <- slopes %>% 
+  filter(adjusted.p.value < fract) %>% 
+  group_by(exp_act) %>% 
+  select(-statistic, -p.value) %>% as.data.frame()
+  
+  df = rbind(df, top_slopes)
+  
+}
+  
+  return(df)
+  
+}
+
+check = f()
+
+check$exp_act %>% as.factor() %>% summary()/smr * 100
+
+
+
+tt <- function(text, colour, x, y) {
+  annotation_custom(
+    grob = textGrob(
+      label = text, hjust = 0, gp = gpar(col = colour)),
+      xmin = x, xmax = x,
+      ymin = y, ymax = y
+  )   
+}
+
+```
+
+
+
+```{r}
+
+
+words_by_time %>% 
+  inner_join(top_slopes, by = c("words", "exp_act")) %>% 
+  filter(exp_act == "overexp") %>% mutate(flt = count/time_total) %>% top_n(10, wt = estimate) %>% 
+  ggplot(aes(time_floor, count/time_total, color = words, lty = words)) + 
+  geom_line(size = 1.3) + 
+  labs(x = NULL, y = "Word frequency")
+
+
+words_by_time %>% 
+  inner_join(top_slopes, by = c("words", "exp_act")) %>% 
+  filter(exp_act == "experienced") %>% 
+  ggplot(aes(time_floor, count/time_total, color = words, lty = words)) + 
+  geom_line(size = 1.3) + 
+  labs(x = NULL, y = "Word frequency")
+
+
+words_by_time %>% 
+  inner_join(top_slopes, by = c("words", "exp_act")) %>% 
+  filter(exp_act == "young") %>% mutate(flt = count/time_total) %>% #top_n(10, wt = estimate) %>% 
+  ggplot(aes(time_floor, count/time_total, color = words, lty = words)) + 
+  geom_line(size = 1.3) + 
+  labs(x = NULL, y = "Word frequency")
+
+
+```
+
+
+
+# Finding differences in groups between categories
+
+## experienced/young
+
+```{r}
+
+word_ratios <- corp_new %>% 
+  filter(words %in% words_to_check$words) %>% 
+  left_join(plt_wrd, by = c("text" = "document")) %>% 
+    filter(exp_act %in% c("experienced", "young")) %>% 
+  count(words, exp_act) %>% filter(sum(n) >= 10) %>% 
+  ungroup() %>% 
+  spread(exp_act, n, fill = 0) %>% 
+  mutate_if(is.numeric, funs((. + 1) / sum(. + 1))) %>% 
+  mutate(logratio = log(experienced / young)) %>% 
+  arrange(desc(logratio))
+
+
+w = word_ratios  %>% 
+  group_by(logratio < 0) %>% 
+  top_n(15, abs(logratio)) %>% 
+  ungroup() %>% 
+  mutate(word = reorder(words, logratio)) %>% 
+  mutate(color = ifelse(word %in% c("in this", "inspired by", "by the", "based on"), "red", 
+                        ifelse(word %in% c("need your", "we need"), "blue", "black")))
+
+
+
+p = w %>% ggplot(aes(word, logratio, fill = logratio < 0)) + 
+  geom_col(show.legend = FALSE) + 
+  coord_flip() + 
+  ylab("log odds ratio") + 
+  scale_fill_manual(values = c("TRUE" = "blue", "FALSE" = "red")) +  
+  # scale_fill_discrete(name = "", labels = c("overexp", "young")) + 
+  theme(axis.text.y = element_text(colour = w$color[length(w$color):1]),
+        title = element_text(hjust = align)) + 
+  xlab("Bigrams") + ggtitle("")
+
+p = p + tt("Young",
+       "blue", 17.5, -.8) +
+  tt("Experienced",
+       "red", 17.5, -.2) + 
+  tt("|",
+     "black", 17.5, -.35)
+  
+# Code to override clipping
+gt <- ggplot_gtable(ggplot_build(p))
+gt$layout$clip[gt$layout$name == "panel"] <- "off"
+grid.draw(gt)
+
+ggsave(filename = str_c(path_plots, "younge_exp_comp.png"), plot = gt, device = "png")
+
+```
+
+
+## young/overexp
+
+```{r}
+
+word_ratios <- corp_new %>% 
+  filter(words %in% words_to_check$words) %>% 
+  left_join(plt_wrd, by = c("text" = "document")) %>% 
+    filter(exp_act %in% c("overexp", "young")) %>% 
+  count(words, exp_act) %>% filter(sum(n) >= 10) %>% 
+  ungroup() %>% 
+  spread(exp_act, n, fill = 0) %>% 
+  mutate_if(is.numeric, funs((. + 1) / sum(. + 1))) %>% 
+  mutate(logratio = log(overexp / young)) %>% 
+  arrange(desc(logratio))
+
+
+w = word_ratios  %>% 
+  group_by(logratio < 0) %>% 
+  top_n(10, abs(logratio)) %>% 
+  ungroup() %>% 
+  mutate(word = reorder(words, logratio)) %>% 
+  mutate(color = ifelse(word %in% c("in this", "inspired by", "by the"), "green", 
+                        ifelse(word %in% c("based on", "need your", "we need"), "red", "black")))
+
+
+
+p = w %>% ggplot(aes(word, logratio, fill = logratio < 0)) + 
+  geom_col(show.legend = FALSE) + 
+  coord_flip() + 
+  ylab("log odds ratio") + 
+  scale_fill_manual(values = c("TRUE" = "red", "FALSE" = "green")) +  
+  ggtitle("") + 
+  theme(axis.text.y = element_text(colour = w$color[length(w$color):1])) + xlab("Bigrams")
+
+p = p + tt("Young",
+       "red", 17.5, -.8) +
+  tt("Overexperienced",
+       "green", 17.5, -.2) + 
+  tt("|",
+     "black", 17.5, -.35)
+  
+# Code to override clipping
+
+gt <- ggplot_gtable(ggplot_build(p))
+gt$layout$clip[gt$layout$name == "panel"] <- "off"
+grid.draw(gt)
+
+ggsave(filename = str_c(path_plots, "younge_overexp_comp.png"), plot = gt, device = "png")
+
+```
+
+
+## experienced/overexp
+
+```{r}
+
+word_ratios <- corp_new %>% 
+  filter(words %in% c(words_to_check$words, "hey guys")) %>% 
+  left_join(plt_wrd, by = c("text" = "document")) %>% 
+    filter(exp_act %in% c("overexp", "experienced")) %>% 
+  count(words, exp_act) %>% filter(sum(n) >= 10) %>% 
+  ungroup() %>% 
+  spread(exp_act, n, fill = 0) %>% 
+  mutate_if(is.numeric, funs((. + 1) / sum(. + 1))) %>% 
+  mutate(logratio = log(overexp / experienced)) %>% 
+  arrange(desc(logratio))
+
+w = word_ratios  %>% 
+  group_by(logratio < 0) %>% 
+  top_n(10, abs(logratio)) %>% 
+  ungroup() %>% 
+  mutate(word = reorder(words, logratio)) %>% 
+  mutate(color = ifelse(word %in% c("in this", "creating a", "by the"), "green", 
+                        ifelse(word %in% c("based on", "need your", "we need"), "blue", "black")))
+
+
+p = w %>% ggplot(aes(word, logratio, fill = logratio < 0)) + 
+  geom_col(show.legend = FALSE) + 
+  coord_flip() + 
+  ylab("log odds ratio") + 
+  # scale_fill_discrete(name = "", labels = c("overexp", "experienced")) + 
+  scale_fill_manual(values = c("TRUE" = "blue", "FALSE" = "green")) +  
+  ggtitle("") + 
+  theme(axis.text.y = element_text(color = w$color[length(w$color):1])) + xlab("Bigrams")
+
+p = p + tt("Experienced",
+       "blue", 16.5, -.8) +
+  tt("Overexperienced",
+       "green", 16.5, -.2) + 
+  tt("|",
+     "black", 16.5, -.25)
+  
+# Code to override clipping
+gt <- ggplot_gtable(ggplot_build(p))
+gt$layout$clip[gt$layout$name == "panel"] <- "off"
+grid.draw(gt)
+
+ggsave(filename = str_c(path_plots, "exp_overexp_comp.png"), plot = gt, device = "png")
+
+```
+
+
+
+
+```{r}
+
+kruskal.test(state_new ~ as.factor(exp_act), data = plt)
+
+plt$exp_act %<>% as.factor()
+attach(plt)
+
+dunn.test::dunn.test(exp_act, state_new, method = "Bonferroni")
+mcnemar.test(state_new, exp_act)
+
+detach(plt)
+```
+
+
+
+
+```{r}
+
+words_by_time %>% 
+  inner_join(top_slopes, by = c("words", "exp_act")) %>% View()
+
+
+```
+

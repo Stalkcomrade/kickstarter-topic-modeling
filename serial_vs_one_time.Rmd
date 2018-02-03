@@ -1,0 +1,225 @@
+---
+title: "serial_vs_one_time"
+output: html_document
+---
+
+# Making experience variable
+
+```{r}
+
+dfc = dfc[!duplicated(dfc$id), ]
+crt_ids = dfc$creator_id[duplicated(dfc$creator_id)]
+
+## generate number of row per creator
+
+dfc %<>% group_by(creator_id) %>% mutate(exp = row_number(state_changed_at))
+
+```
+
+
+
+# One-time creators
+
+
+```{r}
+
+# dfcp = dfc %>% ungroup() %>% filter(state_new %in% c("successful", "overfunded", "failed"))
+
+# dfcp 
+
+dfc_agr = dfcp[dfcp$exp == 1,] %>% 
+  mutate(lag = floor_date(state_changed_at, "halfyear")) %>% 
+  group_by(lag, state_new, topic, add = T) %>% 
+  summarise(n_per_topic = n(),
+            perc = n_per_topic/nrow(dfcp[dfcp$exp == 1,]))
+
+dfc_agr_lag = dfc_agr %>% group_by(lag, state_new) %>% 
+  summarise(n_per_lag = sum(n_per_topic))
+
+dfc_final = left_join(dfc_agr, dfc_agr_lag, by = c("lag", "state_new"))
+  
+
+dfc_final = left_join(dfc_final, 
+dfc_final %>% group_by(lag, state_new, topic, add = T) %>% 
+  summarise(perc_per_lag = n_per_topic/n_per_lag),
+by = c("lag", "state_new","topic"))
+
+
+# Generating Date
+
+# dfc_final$date = as.yearmon(dfc_final %$% str_c(year, month, "00", sep = "-"), "%Y-%m") %>% lubridate::as_datetime()
+
+
+
+g1 = ggplot(data = dfc_final %>% 
+         ungroup() %>% 
+         mutate(topic_aggr = ifelse(.$topic %in% c(2,4), "overfunded", 
+                                    ifelse(.$topic %in% c(3, 5, 6), "successful", "failed")))) +
+  geom_line(aes(y = perc*100, x = lag, group = topic_aggr, colour = as.factor(topic_aggr))) +
+  facet_grid(. ~ state_new, scales = "free") + ggtitle("One-time Founders") + 
+  xlab("Time") + ylab("Percentage from all Projects of One-time Founders")
+
+
+
+dfc_final$state_new %<>% as.factor()
+dfc_final$state_new %<>% factor(levels = levels(dfc_final$state_new)[c(1,3,2)])
+
+dfc_final %<>% mutate(tpc_ct = ifelse(topic == 2, "failed", 
+                         ifelse(topic == 5, "successful", "overfunded")))
+
+
+dfc_final$tpc_ct %<>% as.factor()
+dfc_final$tpc_ct %<>% factor(levels = levels(dfc_final$tpc_ct)[c(1,3,2)])
+
+
+g1 = ggplot(data = dfc_final %>% 
+         ungroup() %>% filter(topic %in% c(2,5,10))) +
+  geom_line(aes(y = perc*100, x = lag, group = tpc_ct, colour = tpc_ct)) +
+  facet_grid(. ~ state_new, scales = "free") + 
+  ggtitle("One-time Founders") + xlab("Time") + ylab("Percentage from all Projects \n of One-time Founders") + 
+  scale_color_manual(values = c("failed" = "red", "successful" = "blue", "overfunded" = "green")) +
+  guides(color = guide_legend("Topic"))
+
+
+g1
+
+```
+
+
+
+# Serial creators
+
+```{r}
+
+# choosing creators with exp more than 1
+
+exp_crt_ids = dfc$creator_id[dfc$exp > 1]
+
+plt = dfc %>% filter(creator_id %in% exp_crt_ids)
+
+```
+
+
+
+```{r}
+
+## Only successful, overfunded and failed projects are in game 
+
+
+
+# calculating proportion of each topic
+
+## check uniqueness of topic per doc
+
+# plt %>% group_by(id, topic) %>% filter(row_number() == 1) # chekced
+
+# plt$state_changed_at %>% head() %>% as.Date(by = "month")
+
+plt %<>% ungroup() %>% filter(state_new %in% c("successful", "overfunded", "failed"))
+
+
+plt_agr = plt  %>% 
+  mutate(lag = floor_date(state_changed_at, "halfyear")) %>% 
+  group_by(lag, state_new, topic, add = T) %>% 
+  summarise(n_per_topic = n(),
+            perc = n_per_topic/nrow(plt))
+
+plt_agr_lag = plt_agr %>% group_by(lag, state_new) %>% 
+  summarise(n_per_lag = sum(n_per_topic))
+
+plt_final = left_join(plt_agr, plt_agr_lag, by = c("lag", "state_new"))
+  
+
+plt_final = left_join(plt_final, 
+plt_final %>% group_by(lag, state_new, topic, add = T) %>% 
+  summarise(perc_per_lag = n_per_topic/n_per_lag),
+by = c("lag", "state_new","topic"))
+
+
+  
+```
+
+!!!Compare theese plots with others creators distributions!!!!
+
+```{r}
+
+
+g2 = ggplot(data = plt_final %>% 
+         ungroup() %>% 
+         mutate(topic_aggr = ifelse(.$topic %in% c(2,4), "overfunded", 
+                                    ifelse(.$topic %in% c(3, 5, 6), "successful", "failed")))) +
+  geom_line(aes(y = perc*100, x = lag, group = topic_aggr, colour = as.factor(topic_aggr))) +
+  facet_grid(. ~ state_new) + ggtitle("Serial Founders") + xlab("Time") + ylab("Percentage from all Projects of Serial Founders") + 
+  scale_color_discrete(values = c(""))
+
+
+
+plt_final$state_new %<>% as.factor()
+plt_final$state_new %<>% factor(levels = levels(plt_final$state_new)[c(1,3,2)])
+
+plt_final %<>% mutate(tpc_ct = ifelse(topic == 2, "failed", 
+                         ifelse(topic == 5, "successful", "overfunded")))
+
+
+plt_final$tpc_ct %<>% as.factor()
+plt_final$tpc_ct %<>% factor(levels = levels(plt_final$tpc_ct)[c(1,3,2)])
+
+g2 = ggplot(plt_final %>% 
+         ungroup() %>% 
+           filter(topic %in% c(2,5,10))) +
+  geom_line(aes(y = perc*100, x = lag, group = tpc_ct, colour = tpc_ct)) +
+  facet_grid(. ~ state_new) + ggtitle("Serial Founders") + 
+  xlab("Time") + ylab("Percentage from all Projects \n of Serial Founders") + 
+  scale_color_manual(values = c("failed" = "red", "successful" = "blue", "overfunded" = "green")) +
+  guides(color = guide_legend("Topic"))
+
+
+g2
+
+```
+
+
+```{r}
+
+grid.arrange(g1, g2, ncol = 1)
+
+p = arrangeGrob(g1, g2, ncol = 1)
+ggsave(filename = str_c(path_plots, "one_time_vs_serial.png"), plot = p, device = "png")
+
+```
+
+
+
+# aggregating by factors
+## topic
+
+```{r}
+
+plt_agr = left_join(plt_d %>%
+  group_by(exp_act, topic) %>% 
+  summarise(n_per_topic = n()),
+  plt_d %>%
+  group_by(exp_act) %>% 
+  summarise(n_per_exp_act = n()),
+  by = c("exp_act")) %>% group_by(exp_act, topic) %>% 
+  summarise(perc = n_per_topic/n_per_exp_act)
+
+plt_agr$exp_act %<>% as.factor()
+plt_agr$exp_act %<>% factor(levels = levels(plt_agr$exp_act)[c(3,1,2)])
+  
+plt_agr$topic %<>% as.factor()
+
+plt_agr %<>%  mutate(tpc = ifelse(topic == "10", "failed", ifelse(topic == "2", "overfunded", "successful")))
+
+plt_agr$tpc %<>% as.factor()
+plt_agr$tpc %<>% factor(levels = levels(plt_agr$tpc)[c(1,3,2)])
+
+ggplot(data = plt_agr %>% filter(topic %in% c("10", "2", "5"))) + geom_line(aes(x = exp_act, y = perc, colour = tpc, group = tpc)) + facet_wrap("tpc") + 
+  theme(axis.text.x = element_text(angle = 90)) + xlab("Experience") + ylab("Percentage from all Projects \n Created by Founders in the Current Experience Category ") + 
+  scale_color_manual(values = c("failed" = "red", "successful" = "blue", "overfunded" = "green")) +
+  ggtitle("Founders Loosing Innocence") + 
+  guides(colour = guide_legend("Topic"))
+
+ggsave(filename = str_c(path_plots, "serial_rising.png"), plot = last_plot(), device = "png")
+
+```

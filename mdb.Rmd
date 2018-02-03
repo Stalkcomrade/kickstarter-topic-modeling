@@ -1,0 +1,464 @@
+---
+title: "Untitled"
+output: html_document
+---
+
+```{r}
+
+library(mongolite)
+library(tidyverse)
+library(magrittr)
+library(lubridate)
+library(zoo)
+library(gridExtra)
+
+```
+
+
+```{r}
+
+con <- mongo(db = "kck", url = "mongodb://localhost", collection = "KCK")
+
+```
+
+
+```{r}
+
+con$iterate()$one()
+
+```
+
+```{r}
+
+con$index()
+# con$index(add="id")
+
+```
+
+
+
+```{r}
+
+x = 10
+over_path = "/home/stlk/Desktop/DigEc_scripts/over_lda/"
+
+df = read_csv(str_c(over_path, "corp_new_topics_",x, ".csv"))
+
+
+ids = str_c("[", str_c(df$id, collapse = ","), "]")
+
+ids_in = str_c('{"id" : 
+               { "$in" : ', ids, ' } }')
+
+
+# tmp = df$id %>% head(1)
+# tmp = str_c("[", str_c(tmp, collapse = ","), "]")
+# 
+# ids_in = str_c('{"id" :
+#                { "$in" : ', tmp, ' } }')
+
+
+```
+
+
+```{r}
+
+mongo_path = "/home/stlk/Desktop/DigEc_scripts/mongo_exp/"
+
+# con$count(query = ids_in)
+
+con$find(fields = '{"id" : true, "creator_id" : true, 
+         "state_changed_at" : true, 
+         "location_country" : true, 
+         "category_name" : true, 
+         "url_rewards" : true}',
+         query = ids_in, pagesize = 100000,
+         handler = function(d){
+           d <- as.data.frame(d)
+           d <- d[,-1]
+           d$state_changed_at %<>% as_date()
+           d %<>% group_by(id) %>% arrange(desc(state_changed_at)) %>% filter(row_number() == 1)
+           write_csv(path = str_c(mongo_path, "_", d$id[1], ".csv"), x = d)
+         })
+
+```
+
+
+# Fixing problem with state_changed_at
+
+```{r}
+
+crt = read_csv("/home/stlk/Desktop/DigEc_scripts/mongo_exp/creators_united.csv")
+t = read_csv("/home/stlk/Desktop/DigEc_scripts/mongo_exp/creators_with_time.csv")
+t %<>% group_by(id, creator_id) %>% arrange(desc(state_changed_at)) %>% filter(row_number() == 1)
+
+crt = merge(crt %>% dplyr::select(-state_changed_at), t, by = c("id", "creator_id"))
+crt$state_changed_at %<>% as_datetime()
+
+
+```
+
+# Descriptives
+
+```{r}
+
+# crt$creator_id %>% unique() %>% sum()
+# dfc$location_country %>% as.factor() %>% summary()
+# dfc$category_name %>% as.factor() %>% summary()
+
+# dfc$id %>% as.factor() %>%  unique() %>% length() %>% signif(digits = 15)
+# dfc$creator_id %>% as.factor() %>%  unique() %>% length() %>% signif(digits = 15)
+
+```
+
+
+# Merging creators with main dataset
+
+```{r}
+
+dfc = left_join(df, 
+                crt %>% dplyr::select(-group), by = "id")
+
+
+dfc$state_changed_at %<>% as.character() %>% lubridate::as_datetime()
+
+dfc %<>% group_by(creator_id) %>% arrange(state_changed_at, .by_group = T)
+
+# save(file = "/home/stlk/Desktop/DigEc_scripts/df_with_creators.RData", list = c("dfc"))
+
+```
+
+
+```{r}
+
+# #!/usr/bin/env Rscript 
+# 
+# load(file = "/home/stlk/Desktop/DigEc_scripts/df_with_creators.RData")
+# 
+# dfc$exp = unlist(by(dfc, dfc$creator_id, 
+#                     function(x) rank(dfc$state_changed_at, ties.method = "first")))
+# 
+# save(file = "~/DigEc/df_with_creators.RData", list = c("df_with_creators"))
+
+
+```
+
+!!# Words used by founders through time !!
+!!# Percentage of topics for founders through time !!
+
+# Making experience variable
+
+```{r}
+
+dfc = dfc[!duplicated(dfc$id), ]
+crt_ids = dfc$creator_id[duplicated(dfc$creator_id)]
+
+## generate number of row per creator
+
+dfc %<>% group_by(creator_id) %>% mutate(exp = row_number(state_changed_at))
+
+```
+
+
+
+# One-time creators
+
+
+```{r}
+
+dfcp = dfc %>% ungroup() %>% filter(state_new %in% c("successful", "overfunded", "failed"))
+
+
+dfc_agr = dfcp %>% 
+  mutate(month = format(state_changed_at, "%m"), year = format(state_changed_at, "%Y")) %>% 
+  group_by(year, month, state_new, topic, add = T) %>% 
+  summarise(n_per_topic = n(),
+            perc = n_per_topic/nrow(dfcp))
+
+dfc_agr_lag = dfc_agr %>% group_by(year, month, state_new) %>% 
+  summarise(n_per_lag = sum(n_per_topic))
+
+dfc_final = left_join(dfc_agr, dfc_agr_lag, by = c("year" , "month", "state_new"))
+  
+
+dfc_final = left_join(dfc_final, 
+dfc_final %>% group_by(year, month, state_new, topic, add = T) %>% 
+  summarise(perc_per_lag = n_per_topic/n_per_lag),
+by = c("year", "month", "state_new","topic"))
+
+
+# Generating Date
+
+dfc_final$date = as.yearmon(dfc_final %$% str_c(year, month, "00", sep = "-"), "%Y-%m") %>% lubridate::as_datetime()
+
+
+
+g1 = ggplot(data = dfc_final %>% 
+         ungroup() %>% 
+         mutate(topic_aggr = ifelse(.$topic %in% c(2,4), "overfunded", 
+                                    ifelse(.$topic %in% c(3, 5, 6), "successful", "failed"))) %>% 
+         filter(year > 2010)) +
+  geom_line(aes(y = perc*100, x = date, group = topic_aggr, colour = as.factor(topic_aggr))) +
+  facet_grid(. ~ state_new, scales = "free") + ggtitle("one-time")
+
+
+g1
+```
+
+
+
+# Serial creators
+
+```{r}
+
+# choosing creators with exp more than 1
+
+exp_crt_ids = dfc$creator_id[dfc$exp > 1]
+
+plt = dfc %>% filter(creator_id %in% exp_crt_ids)
+
+```
+
+
+
+```{r}
+
+## Only successful, overfunded and failed projects are in game 
+
+
+
+# calculating proportion of each topic
+
+## check uniqueness of topic per doc
+
+# plt %>% group_by(id, topic) %>% filter(row_number() == 1) # chekced
+
+# plt$state_changed_at %>% head() %>% as.Date(by = "month")
+
+plt %<>% ungroup() %>% filter(state_new %in% c("successful", "overfunded", "failed"))
+
+
+plt_agr = plt  %>% 
+  mutate(month = format(state_changed_at, "%m"), year = format(state_changed_at, "%Y")) %>% 
+  group_by(year, month, state_new, topic, add = T) %>% 
+  summarise(n_per_topic = n(),
+            perc = n_per_topic/nrow(plt))
+
+plt_agr_lag = plt_agr %>% group_by(year, month, state_new) %>% 
+  summarise(n_per_lag = sum(n_per_topic))
+
+plt_final = left_join(plt_agr, plt_agr_lag, by = c("year" , "month", "state_new"))
+  
+
+plt_final = left_join(plt_final, 
+plt_final %>% group_by(year, month, state_new, topic, add = T) %>% 
+  summarise(perc_per_lag = n_per_topic/n_per_lag),
+by = c("year", "month", "state_new","topic"))
+
+
+# Generating Date
+
+plt_final$date = as.yearmon(plt_final %$% str_c(year, month, "00", sep = "-"), "%Y-%m") %>% lubridate::as_datetime()
+
+  
+```
+
+!!!Compare theese plots with others creators distributions!!!!
+
+```{r}
+
+g2 = ggplot(data = plt_final %>% 
+         ungroup() %>% 
+         mutate(topic_aggr = ifelse(.$topic %in% c(2,4), "overfunded", 
+                                    ifelse(.$topic %in% c(3, 5, 6), "successful", "failed"))) %>% 
+         filter(year > 2010)) +
+  geom_line(aes(y = perc*100, x = date, group = topic_aggr, colour = as.factor(topic_aggr))) +
+  facet_grid(. ~ state_new) + ggtitle("serial")
+
+```
+
+
+
+```{r}
+
+grid.arrange(g1, g2, ncol = 1)
+
+p = arrangeGrob(g1, g2, ncol = 1)
+ggsave(filename = str_c(path_plots, "enterp_comp.png"), plot = p, device = "png")
+
+```
+
+```{r}
+
+plt$exp_act = ifelse(plt$exp <= q[3], "young", 
+                     ifelse(plt$exp %in% (4:8), "experienced", "overexp"))
+
+
+```
+
+## discritise
+
+```{r}
+
+d_bins = discretize_get_bins(data = plt, input = c("exp"), n_bins = 8)
+plt_d = discretize_df(data = plt, data_bins = d_bins, stringsAsFactors=T)
+
+p5 = ggplot(plt, aes(exp)) + geom_bar(fill="#0072B2") + theme_bw() + theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust=1))
+
+p6=ggplot(plt_d, aes(exp)) + geom_bar(fill="#CC79A7") + theme_bw() + theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust=1))
+
+grid.arrange(p5,p6,ncol = 2)
+
+
+```
+
+
+
+## Based on experience and state
+
+
+```{r}
+
+plt_agr = plt %>% 
+  mutate(lag = floor_date(state_changed_at, "halfyear")) %>% 
+  group_by(lag, topic, state_new, exp_act, add = T) %>% 
+  summarise(n_per_topic = n(),
+            perc = n_per_topic/nrow(plt))
+
+# consider this to be changed, add exp
+
+plt_agr_lag = plt_agr %>% group_by(lag) %>% 
+  summarise(n_per_lag = sum(n_per_topic))
+
+plt_final = left_join(plt_agr, plt_agr_lag, by = c("lag"))
+  
+
+plt_final = left_join(plt_final, 
+plt_final %>% group_by(lag, topic, state_new, exp_act, add = T) %>% 
+  summarise(perc_per_lag = n_per_topic/n_per_lag),
+by = c("lag", "topic", "state_new", "exp_act"))
+
+
+# Generating Date
+
+# plt_final$date = as.yearmon(plt_final %$% str_c(year, month, "00", sep = "-"), "%Y-%m") %>% lubridate::as_datetime()
+
+
+```
+
+
+```{r}
+
+ggplot(data = plt_final %>% 
+         ungroup() %>% 
+         mutate(topic_aggr = ifelse(.$topic %in% c(2,4), "overfunded", 
+                                    ifelse(.$topic %in% c(3, 5, 6), "successful", "failed")))) +
+  geom_line(aes(y = perc*100, 
+                x = lag, 
+                color = as.factor(exp_act), 
+                group = as.factor(exp_act))) + 
+  facet_grid(. ~ as.factor(topic_aggr))
+
+
+
+
+ggplot(data = plt_final %>% 
+         ungroup() %>% 
+         mutate(topic_aggr = ifelse(.$topic %in% c(2,4), "overfunded", 
+                                    ifelse(.$topic %in% c(3, 5, 6), "successful", "failed")))) +
+  geom_line(aes(y = perc*100, x = lag, color = as.factor(topic_aggr), group = as.factor(topic_aggr))) + facet_grid(as.factor(exp_act) ~ as.factor(state_new), scales = "free")
+
+
+ggplot(data = plt_final %>% 
+         ungroup() %>% filter(topic %in% c(2,5,10)) %>% 
+         mutate(topic_aggr = ifelse(.$topic %in% c(2), "overfunded", 
+                                    ifelse(.$topic %in% c(5), "successful", "failed")))) +
+  geom_line(aes(y = perc*100, x = lag, color = as.factor(topic_aggr), group = as.factor(topic_aggr))) + facet_grid(as.factor(exp_act) ~ as.factor(state_new), scales = "free")
+
+
+
+```
+
+
+
+```{r}
+
+dfc %>% ggplot() + geom_bar(aes(x = as.factor(topic)))
+
+```
+
+# x - number of projects, y = topic_percent
+
+
+```{r}
+
+# aggregating by values
+
+plt_agr = left_join(plt %>%
+  group_by(exp, topic) %>% 
+  summarise(n_per_topic = n()),
+  plt %>%
+  group_by(exp) %>% 
+  summarise(n_per_exp = n()),
+  by = c("exp")) %>% group_by(exp, topic) %>% 
+  summarise(perc = n_per_topic/n_per_exp)
+  
+plt_agr$topic %<>% as.factor()
+
+ggplot(data = plt_agr %>% filter(topic %in% c(2,5,10))) + geom_line(aes(x = exp, y = perc, colour = topic, group = topic))
+
+
+quantile(dfcp$exp[dfcp$exp > 1], .90)
+quantile(dfcp$exp[dfcp$exp > 1])
+cut(dfcp$exp[dfcp$exp > 1], breaks = c(2, 3, 6), include.lowest = T, right = T)
+
+```
+
+# aggregating by factors
+## topic
+
+```{r}
+
+plt_agr = left_join(plt %>%
+  group_by(exp_act, topic) %>% 
+  summarise(n_per_topic = n()),
+  plt %>%
+  group_by(exp_act) %>% 
+  summarise(n_per_exp = n()),
+  by = c("exp_act")) %>% group_by(exp_act, topic) %>% 
+  summarise(perc = n_per_topic/n_per_exp)
+  
+plt_agr$exp_act %<>% as.factor()
+plt_agr$exp_act = factor(plt_agr$exp_act, levels(plt_agr$exp_act)[c(3,1,2)])
+plt_agr$topic %<>% as.factor()
+
+ggplot(data = plt_agr) + geom_line(aes(x = exp_act, y = perc, colour = topic, group = topic))
+
+```
+
+## topic_aggr
+
+```{r}
+
+plt_agr = left_join(plt %>% 
+                      mutate(topic_aggr = ifelse(.$topic %in% c(2,4), "overfunded", 
+                                    ifelse(.$topic %in% c(3, 5, 6), "successful", "failed"))) %>%
+  group_by(exp_act, topic_aggr) %>% 
+  summarise(n_per_topic = n()),
+  plt %>% 
+    mutate(topic_aggr = ifelse(.$topic %in% c(2,4), "overfunded", 
+                                    ifelse(.$topic %in% c(3, 5, 6), "successful", "failed"))) %>%
+  group_by(exp_act) %>% 
+  summarise(n_per_exp = n()),
+  by = c("exp_act")) %>% group_by(exp_act, topic_aggr) %>% 
+  summarise(perc = n_per_topic/n_per_exp)
+  
+plt_agr$exp_act %<>% as.factor()
+plt_agr$exp_act = factor(plt_agr$exp_act, levels(plt_agr$exp_act)[c(3,1,2)])
+plt_agr$topic_aggr %<>% as.factor()
+
+ggplot(data = plt_agr) + geom_line(aes(x = exp_act, y = perc, colour = topic_aggr, group = topic_aggr))
+
+```
+
+

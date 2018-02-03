@@ -1,0 +1,146 @@
+---
+title: "2_preparing_data_for_lda"
+output: html_document
+---
+
+```{r}
+
+library(tidyverse)
+library(tidytext)
+library(magrittr)
+
+```
+
+# Making sample
+
+```{r}
+
+# corp_new = read_csv("/home/stlk/Desktop/DigEc_data_samples/y_mongo.csv")
+# corp_new = corp_new %>% dplyr::sample_n(size = nrow(corp_new)*0.025)
+
+# write_csv(path = "/home/stlk/Desktop/DigEc_data_samples/y_mongo_sample.csv", x = corp_new)
+
+```
+
+
+
+```{r}
+
+# corp_new = read_csv(str_c(sample_path, "y_mongo_sample.csv")) # full
+corp_new = read_csv(str_c(sample_path, "y_mongo_blurb_state.csv"))
+
+# deleting NAs
+corp_new = corp_new[!is.na(corp_new$id),]
+
+# deleting duplicates - TEMPORARY
+corp_new = corp_new[!duplicated(corp_new$id),]
+
+corp_new$text = 1:nrow(corp_new)
+
+write_csv(str_c(sample_path, "y_mongo_blurb_state.csv"), x = corp_new)
+
+```
+
+
+# Replace reg
+
+```{r}
+
+
+corp_new = corp_new[which(!grepl("[^\x01-\x7F]+", corp_new$blurb)),]
+corp_new = corp_new[which(!grepl("[^\u0001-\u007F]+", corp_new$blurb)),]
+
+# corp_eng$blurb %<>% str_replace_all("\\d", "")
+
+
+# replace_reg <- paste0(replace_reg1, replace_reg2) 
+# 
+# unnest_reg <- "([^A-Za-z_\\d#@']|'(?![A-Za-z_\\d#@]))" 
+# tidy_tweets <- tweets %>% 
+#   filter(!str_detect(text, "^RT")) %>% 
+#   mutate(text = str_replace_all(text, replace_reg, "")) %>% 
+#   unnest_tokens(word, text, token = "regex", pattern = unnest_reg) %>% 
+#   filter(!word %in% stop_words$word, str_detect(word, "[a-z]"))
+
+```
+
+
+# making csv with meta
+
+```{r}
+
+corp_new_meta = corp_new %>% dplyr::select(-blurb)
+corp_new_blurb = corp_new %>% dplyr::select(id, text, blurb)
+corp_new = corp_new %>% dplyr::select(text, blurb)
+
+write_csv(str_c(sample_path, "corp_new_meta.csv"), x = corp_new_meta)
+write_csv(str_c(sample_path, "corp_new_blurb.csv"), x = corp_new_blurb)
+write_csv(str_c(sample_path, "corp_new_text.csv"), x = corp_new)
+
+corp_new_blurb = NULL
+corp_new_meta = NULL
+
+
+```
+
+
+```{r}
+
+corp_new = corp_new %>%
+  unnest_tokens(words,
+                blurb,
+                to_lower = T,
+                token = "regex",
+                pattern = "[^A-Za-z\\s]")
+
+corp_new$words %<>% stringr::str_trim(side = "both")
+
+
+```
+
+# Stop words
+
+
+```{r}
+
+stop_words = data.frame(words = c(""), 
+                        lexicon = "my_dict")
+
+
+stop_words_default = read_tsv("stop_words.txt")
+stop_words_default$lexicon = "default"
+
+corp_new <- corp_new %>%
+  anti_join(stop_words_default, by = "words")
+
+
+```
+ 
+  
+### Increasing vocab of stop-words
+## To find the most frequent words to delete
+
+```{r}
+
+# add = corp_new %>%
+#   count(words, sort = TRUE) %>% head(n = 120)
+
+add = read_csv(str_c(sample_path, "add.csv"))
+
+colnames(add) = c("words", "lexicon")
+add$lexicon = rep("my_dict", nrow(add))
+
+```
+
+
+```{r}
+
+add = rbind(add, stop_words)
+
+corp_new <- corp_new %>%
+  anti_join(add, by = "words")
+
+
+```
+
+

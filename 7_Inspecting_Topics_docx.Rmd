@@ -1,0 +1,123 @@
+---
+title: "7_Inspecting_Topics_docx"
+output:
+  html_document: default
+  word_document: default
+---
+
+
+```{r}
+
+library(readr)
+library(magrittr)
+library(stringr)
+library(knitr)
+library(dplyr)
+
+over_path = "/home/stlk/Desktop/DigEc_scripts/over_lda/"
+x = 10
+
+```
+
+
+```{r}
+
+ap_lda_td = read_csv(str_c(over_path, "ap_lda_td_", x, ".csv"))
+topic.words = ap_lda_td %>% 
+  group_by(topic) %>% 
+  top_n(20, wt = beta) %>% 
+  ungroup() %>% 
+  arrange(topic, -beta)
+
+top_words = topic.words %>% group_by(topic) %>% mutate(top_words = stringr::str_c(term, collapse = ", "))
+top_words = top_words[!duplicated(top_words$topic),] %>% dplyr::select(-beta, -term)
+  
+
+knitr::kable(top_words[c(1,10,3,5,6,2,4,7,8,9),], align = "lr", longtable = T, format = "html")
+
+# pander::pander(top_words)
+# pander::pandoc.table(top_words)
+
+
+```
+
+
+## 
+
+```{r}
+
+df %>% filter(topic == 7) %>% arrange(desc(gamma)) %$% head(blurb, 10)
+df %>% filter(topic == 7 & state == "successful") %>% arrange(desc(gamma)) %>% head(30) %>% View()
+
+```
+
+
+```{r}
+
+topic_projects = df %>% group_by(topic) %>% top_n(3, gamma) %>% ungroup() %>% arrange(topic, -gamma)
+
+
+topic_projects %>% dplyr::select(topic, description = blurb) %>% knitr::kable(align = "lr", longtable = T)
+
+
+df[df %$% str_detect(blurb,  "loss"),] %>% filter(topic == 10) %>% View()
+
+df %>% filter(topic == 10) %>% arrange(desc(gamma)) %>% View()
+
+```
+
+
+```{r}
+
+
+# 1,2,3,4,5,6,   10
+
+# 7,8,9
+
+
+df %>% filter(topic == 7) %>% arrange(desc(gamma)) %>% View()
+df[df$id %in% c(340441647, 1706409622, 302203119),] %>% dplyr::select(blurb) %$% blurb # 7
+
+df %>% filter(topic == 8) %>% arrange(desc(gamma)) %>% View()
+df[df$id %in% c(812764906, 1533700707, 1744930240),] %>% dplyr::select(blurb) %$% blurb # 8
+
+df %>% filter(topic == 9) %>% arrange(desc(gamma)) %>% View()
+df[df$id %in% c(2018735053, 1971813308, 789004368),] %>% dplyr::select(blurb) %$% blurb # 9
+
+df[df$id %in% c(643780586, 1932236147, 1213368343),] %>% dplyr::select(blurb) %$% blurb # 2
+df[df$id %in% c(1091199133, 320272954, 35745923),] %>% dplyr::select(blurb) %$% blurb # 4
+
+df[df$id %in% c(537726031, 2324098, 8388418),] %>% dplyr::select(blurb) %$% blurb # 3
+df[df$id %in% c(842314814, 54406707, 57960076),] %>% dplyr::select(blurb) %$% blurb # 5
+df[df$id %in% c(733921666, 10505069, 478641956),] %>% dplyr::select(blurb) %$% blurb # 6
+
+df[df$id %in% c(1140921157, 32309075, 1129568023),] %>% dplyr::select(blurb) %$% blurb # 1
+df[df$id %in% c(120382383, 927761167, 444046001),] %>% dplyr::select(blurb) %$% blurb # 10
+
+txt = data.frame(Topic = rep(c(1,10, 3,5,6,2,4, 7, 8, 9), each = 3),
+                 Blurb = c(df[df$id %in% c(1140921157, 32309075, 1129568023),] %>%
+                             dplyr::select(blurb) %$% blurb,
+                           df[df$id %in% c(120382383, 927761167, 444046001),] %>%
+                             dplyr::select(blurb) %$% blurb,
+                           df[df$id %in% c(537726031, 2324098, 8388418),] %>% 
+                             dplyr::select(blurb) %$% blurb,
+                           df[df$id %in% c(842314814, 54406707, 57960076),] %>%
+                             dplyr::select(blurb) %$% blurb,
+                           df[df$id %in% c(733921666, 10505069, 478641956),] %>%
+                             dplyr::select(blurb) %$% blurb,
+                           df[df$id %in% c(643780586, 1932236147, 1213368343),] %>%
+                             dplyr::select(blurb) %$% blurb,
+                           df[df$id %in% c(1091199133, 320272954, 35745923),] %>%
+                             dplyr::select(blurb) %$% blurb,
+                           df[df$id %in% c(340441647, 1706409622, 302203119),] %>%
+                             dplyr::select(blurb) %$% blurb,
+                           df[df$id %in% c(812764906, 1533700707, 1744930240),] %>%
+                             dplyr::select(blurb) %$% blurb,
+                           df[df$id %in% c(2018735053, 1971813308, 789004368),] %>%
+                             dplyr::select(blurb) %$% blurb))
+
+
+knitr::kable(txt, align = "lr", longtable = T, format = "html")
+
+```
+
