@@ -1,3 +1,3 @@
-# kickstarter_database_topic_modeling
+# kickstarter-topic-modeling
 
 scripts for Digital Economies report paper
